@@ -36,6 +36,7 @@ import matplotlib.pyplot as plt
 from typing import Optional
 import string
 import random
+from collections import defaultdict
 
 
 def alphabetic_rank(word):
@@ -454,9 +455,8 @@ class DemoTransformer(nn.Module):
                     extra_value_array[index1][index2][index3] += value_to_add
                 resid_intervention_factor = 1.0 
                 if intervene_as_fraction_of_resid is not None:
-                    assert np.isclose(np.linalg.norm(residual_intervention), 1.0)
                     residual_norm = np.linalg.norm(residual.detach().numpy())
-                    resid_intervention_factor = intervene_as_fraction_of_resid * residual_norm
+                    resid_intervention_factor = intervene_as_fraction_of_resid * residual_norm / np.linalg.norm(residual_intervention)
                 residual = (residual + torch.from_numpy(residual_intervention) * resid_intervention_factor + torch.from_numpy(extra_value_array)).float()
             all_resids.append(residual)
             if save_with_prefix:
@@ -467,14 +467,13 @@ class DemoTransformer(nn.Module):
             residual = block(residual)
             if i == intervene_in_resid_at_layer and resid_intervention_filename:
                 residual_intervention = pickle.load(open(resid_intervention_filename, 'rb'))
-                print('intervening!')
-                print(np.linalg.norm(residual.detach().numpy()))
+                # print('intervening!')
+                # print(np.linalg.norm(residual.detach().numpy()))
 
                 resid_intervention_factor = 1.0 
                 if intervene_as_fraction_of_resid is not None:
-                    assert np.isclose(np.linalg.norm(residual_intervention), 1.0)
                     residual_norm = np.linalg.norm(residual.detach().numpy())
-                    resid_intervention_factor = intervene_as_fraction_of_resid * residual_norm                
+                    resid_intervention_factor = intervene_as_fraction_of_resid * residual_norm / np.linalg.norm(residual_intervention)            
                 
                 residual = (residual + torch.from_numpy(residual_intervention) * resid_intervention_factor).float()
             all_resids.append(residual)
@@ -817,15 +816,18 @@ if False:
     raise Exception()
 
 
-if True:
+if False:
     import pickle
     import tiktoken
     from collections import defaultdict
 
-    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+    # sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+    sentences = pickle.load(open('10_token_sentences_with_mehitabel.p', 'rb'))
 
-    all_path = '10_token_resid_streams.p'
-    index_to_sentence_path = '10_index_to_sentence.p'
+    # all_path = '10_token_resid_streams.p'
+    all_path = '10_token_resid_streams_with_mehitabel.p'
+    # index_to_sentence_path = '10_index_to_sentence.p'
+    index_to_sentence_path = '10_index_to_sentence_with_mehitabel.p'
 
     # male_resid_streams = pickle.load(open(male_path, 'rb')) if file_exists(male_path) else defaultdict(list)
     # female_resid_streams = pickle.load(open(female_path, 'rb')) if file_exists(female_path) else defaultdict(list)
@@ -955,6 +957,35 @@ if False:
     pickle.dump(index_to_completeness, open(index_to_completeness_path, 'wb'))
 
 
+if False:
+    import pickle
+
+    matrix = demo_gpt2.unembed.W_U.detach().numpy()
+    # matrix_pinv = np.linalg.pinv(matrix)
+
+    vector = np.zeros(matrix.shape[1])
+    vector[13] = 1 
+
+    print(matrix.shape)
+
+    result = np.dot(matrix, vector)
+
+    print(result.shape)
+
+    # Repeat the result 8 times
+    repeated_result = np.tile(result, 9)
+
+    # Reshape the repeated_result into a 1x8xmatrix.shape[0] tensor
+    reshaped_result = np.reshape(repeated_result, (1, 9, matrix.shape[0]))
+
+    # plt.matshow(reshaped_result)
+    # plt.show()
+
+    pickle.dump(reshaped_result, open('period_intervention.p', 'wb'))
+
+    raise Exception()
+
+
 
 if False:
     import pickle
@@ -965,14 +996,20 @@ if False:
 
     # all_path = 'eight_token_resid_streams.p'
     index_to_sentence_path = 'eight_token_index_to_sentence.p'
+
+    # index_to_sentence_with_mehitabel_path = '10_token_index_to_sentence_with_mehitabel.p'
+
     index_to_completeness_path = 'eight_token_index_to_completeness.p'
+
+    index_to_sentence = pickle.load(open(index_to_sentence_path, 'rb'))
+    index_to_completeness = pickle.load(open(index_to_completeness_path, 'rb'))
 
     # male_resid_streams = pickle.load(open(male_path, 'rb')) if file_exists(male_path) else defaultdict(list)
     # female_resid_streams = pickle.load(open(female_path, 'rb')) if file_exists(female_path) else defaultdict(list)
     # all_resid_streams = pickle.load(open(all_path, 'rb')) if file_exists(all_path) else defaultdict(list)
 
-    index_to_sentence = pickle.load(open(index_to_sentence_path, 'rb')) if file_exists(index_to_sentence_path) else {}
-    index_to_completeness = pickle.load(open(index_to_completeness_path, 'rb')) if file_exists(index_to_completeness_path) else {}
+    # index_to_sentence = pickle.load(open(index_to_sentence_path, 'rb')) if file_exists(index_to_sentence_path) else {}
+    # index_to_sentence_with_mehitabel = pickle.load(open(index_to_sentence_with_mehitabel_path, 'rb')) if file_exists(index_to_completeness_path) else {}
 
 
     # def add_streams_to_storage(streams, stream_storage):
@@ -983,7 +1020,18 @@ if False:
 
     # seen_last_halt_point = False
 
+    pre_interventions = []
+    post_interventions = []
+
+    from math import log
+
     for i, sentence in index_to_sentence.items():
+
+        # print(i)
+
+        enc = tiktoken.get_encoding('r50k_base')
+        if len(enc.encode(sentence)) != 8:
+            continue
 
         # if i < 2800:
         #     continue
@@ -999,16 +1047,18 @@ if False:
 
         probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
 
-        if probabilities[0] > 0.05:
-            # Is or could be a complete sentence
-            index_to_completeness[i] = 1
-        else:
-            index_to_completeness[i] = 0
+        # if probabilities[0] > 0.05:
+        #     # Is or could be a complete sentence
+        #     index_to_completeness[i] = 1
+        # else:
+        #     index_to_completeness[i] = 0
 
-        print(sentence)
-        print(probabilities)
-        print(probabilities.shape)
-        print(probabilities[432])
+        # print(sentence)
+        # print(probabilities)
+        # print(probabilities.shape)
+        # print(probabilities[13])
+        token_index = 13
+        pre_interventions.append(log(probabilities[token_index]))
 
         # for j in range(11):
         #     plt.plot(pickle.load(open(f'w_norm_sentence_completeness_layer_{j}.p', 'rb')).flatten())
@@ -1016,22 +1066,25 @@ if False:
 
         test_tokens = cuda(reference_gpt2.to_tokens(sentence))
         # print(reference_gpt2.to_str_tokens(test_tokens))
-        demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=3, 
-                                   resid_intervention_filename='w_norm_sentence_completeness_layer_3.p',
-                                   intervene_as_fraction_of_resid=0.05)
+        demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=10, 
+                                #    resid_intervention_filename='w_norm_sentence_completeness_layer_6.p',
+                                   resid_intervention_filename='period_intervention.p',
+                                   intervene_as_fraction_of_resid=1.0)
 
         probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
 
-        if probabilities[0] > 0.05:
-            # Is or could be a complete sentence
-            index_to_completeness[i] = 1
-        else:
-            index_to_completeness[i] = 0
+        post_interventions.append(log(probabilities[token_index]))
 
-        print(sentence)
-        print(probabilities)
-        print(probabilities.shape)
-        print(probabilities[432])        
+        # if probabilities[0] > 0.05:
+        #     # Is or could be a complete sentence
+        #     index_to_completeness[i] = 1
+        # else:
+        #     index_to_completeness[i] = 0
+
+        # print(sentence)
+        # print(probabilities)
+        # print(probabilities.shape)
+        # print(probabilities[13])        
 
         # add_streams_to_storage(resid_streams, all_resid_streams)
 
@@ -1043,12 +1096,788 @@ if False:
             # # pickle.dump(female_resid_streams, open(female_path, 'wb'))
             # pickle.dump(all_resid_streams, open(all_path, 'wb'))
             # pickle.dump(index_to_completeness, open(index_to_completeness_path, 'wb'))
+
+    plt.plot(pre_interventions, post_interventions, 'bo')
+    plt.show()
     # pickle.dump(male_resid_streams, open(male_path, 'wb'))
     # pickle.dump(female_resid_streams, open(female_path, 'wb'))
     # pickle.dump(all_resid_streams, open(all_path, 'wb'))
     # pickle.dump(index_to_completeness, open(index_to_completeness_path, 'wb'))
 
 
+def get_moniker_from_name(name):
+    return name.lower().replace(' ', '_')
+
+
+
+if False:
+    import pickle
+    import tiktoken
+    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+    enc = tiktoken.get_encoding('r50k_base')
+ 
+    likely_bigram_resids_to_add_to_storage = defaultdict(list)
+    unlikely_bigram_resids_to_add_to_storage = defaultdict(list)
+
+    also_do_unlikely = False
+
+    for i, sentence in enumerate(sentences):
+        encoded_sentence = enc.encode(sentence)
+        for j, token_to_repeat in enumerate(encoded_sentence[:-1]):
+            token_following_token_to_repeat = encoded_sentence[j+1]
+
+            encoded_sentence_with_token_repeated = [*encoded_sentence, token_to_repeat]
+            sentence_with_token_repeated = enc.decode(encoded_sentence_with_token_repeated)
+
+            test_tokens = cuda(reference_gpt2.to_tokens(sentence_with_token_repeated))
+
+            demo_logits, all_resids = demo_gpt2(test_tokens)
+
+            probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+            # print(sentence)
+            # print(sentence_with_token_repeated)
+            # print(probabilities[token_to_repeat])
+            # print(probabilities[token_following_token_to_repeat])
+
+            if probabilities[token_following_token_to_repeat] > 0.9:
+                # print(sentence)
+                # print(sentence_with_token_repeated)
+                # print(f'Likely bigram: {enc.decode([token_to_repeat, token_following_token_to_repeat])}')
+                # print(probabilities[token_following_token_to_repeat])
+            
+                for k, resid in enumerate(all_resids):
+                    likely_bigram_resids_to_add_to_storage[k].append((resid[0, j+1, :], resid[0, j+2, :], sentence_with_token_repeated, j))
+                    
+
+            if probabilities[token_following_token_to_repeat] < 0.1 and also_do_unlikely:
+                # print(sentence)
+                # print(sentence_with_token_repeated)
+                # print(f'Unlikely bigram: {enc.decode([token_to_repeat, token_following_token_to_repeat])}')
+                # print(probabilities[token_following_token_to_repeat])                
+
+                for k, resid in enumerate(all_resids):
+                    unlikely_bigram_resids_to_add_to_storage[k].append((resid[0, j+1, :], resid[0, j+2, :], sentence_with_token_repeated, j))
+
+        if i % 25 == 0:
+            print(i)
+
+            likely_bigram_resids_path = 'likely_bigram_resids.p'
+            stored_likely_bigrams = pickle.load(open(likely_bigram_resids_path, 'rb')) if file_exists(likely_bigram_resids_path) else defaultdict(list)
+            for key in likely_bigram_resids_to_add_to_storage:
+                stored_likely_bigrams[key].extend(likely_bigram_resids_to_add_to_storage[key])
+            pickle.dump(stored_likely_bigrams, open(likely_bigram_resids_path, 'wb'))
+
+
+            if also_do_unlikely:
+                unlikely_bigram_resids_path = 'unlikely_bigram_resids.p'
+                stored_unlikely_bigrams = pickle.load(open(unlikely_bigram_resids_path, 'rb')) if file_exists(unlikely_bigram_resids_path) else defaultdict(list)
+                for key in unlikely_bigram_resids_to_add_to_storage:
+                    stored_unlikely_bigrams[key].extend(unlikely_bigram_resids_to_add_to_storage[key])
+                pickle.dump(stored_unlikely_bigrams, open(unlikely_bigram_resids_path, 'wb'))
+
+            likely_bigram_resids_to_add_to_storage = defaultdict(list)
+            unlikely_bigram_resids_to_add_to_storage = defaultdict(list)
+            stored_likely_bigrams = None
+            stored_unlikely_bigrams = None    
+
+
+
+if False:
+    import pickle
+    import tiktoken
+    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+    enc = tiktoken.get_encoding('r50k_base')
+    names = ['James', 'Mary', 'Robert', 'Patricia', 'John', 'Jennifer', 'Michael', 'Linda', 'David', 'Elizabeth', 'William', 'Barbara', 'Richard', 'Susan', 'Joseph', 'Jessica', 'Thomas', 'Sarah', 'Christopher', 'Karen', 'Charles', 'Lisa', 'Daniel', 'Nancy', 'Matthew', 'Betty', 'Anthony', 'Sandra', 'Mark', 'Margaret', 'Donald', 'Ashley', 'Steven', 'Kimberly', 'Andrew', 'Emily', 'Paul', 'Donna', 'Joshua', 'Michelle', 'Kenneth', 'Carol', 'Kevin', 'Amanda', 'Brian', 'Melissa', 'George', 'Deborah', 'Timothy', 'Stephanie', 'Ronald', 'Dorothy', 'Jason', 'Rebecca', 'Edward', 'Sharon', 'Jeffrey', 'Laura', 'Ryan', 'Cynthia', 'Jacob', 'Amy', 'Gary', 'Kathleen', 'Nicholas', 'Angela', 'Eric', 'Shirley', 'Jonathan', 'Brenda', 'Stephen', 'Emma', 'Larry', 'Anna', 'Justin', 'Pamela', 'Scott', 'Nicole', 'Brandon', 'Samantha', 'Benjamin', 'Katherine', 'Samuel', 'Christine', 'Gregory', 'Helen', 'Alexander', 'Debra', 'Patrick', 'Rachel', 'Frank', 'Carolyn', 'Raymond', 'Janet', 'Jack', 'Maria', 'Dennis', 'Catherine', 'Jerry', 'Heather', 'Tyler', 'Diane', 'Aaron', 'Olivia', 'Jose', 'Julie', 'Adam', 'Joyce', 'Nathan', 'Victoria', 'Henry', 'Ruth', 'Zachary', 'Virginia', 'Douglas', 'Lauren', 'Peter', 'Kelly', 'Kyle', 'Christina', 'Noah', 'Joan', 'Ethan', 'Evelyn', 'Jeremy', 'Judith', 'Walter', 'Andrea', 'Christian', 'Hannah', 'Keith', 'Megan', 'Roger', 'Cheryl', 'Terry', 'Jacqueline', 'Austin', 'Martha', 'Sean', 'Madison', 'Gerald', 'Teresa', 'Carl', 'Gloria', 'Harold', 'Sara', 'Dylan', 'Janice', 'Arthur', 'Ann', 'Lawrence', 'Kathryn', 'Jordan', 'Abigail', 'Jesse', 'Sophia', 'Bryan', 'Frances', 'Billy', 'Jean', 'Bruce', 'Alice', 'Gabriel', 'Judy', 'Joe', 'Isabella', 'Logan', 'Julia', 'Alan', 'Grace', 'Juan', 'Amber', 'Albert', 'Denise', 'Willie', 'Danielle', 'Elijah', 'Marilyn', 'Wayne', 'Beverly', 'Randy', 'Charlotte', 'Vincent', 'Natalie', 'Mason', 'Theresa', 'Roy', 'Diana', 'Ralph', 'Brittany', 'Bobby', 'Doris', 'Russell', 'Kayla', 'Bradley', 'Alexis', 'Philip', 'Lori', 'Eugene', 'Marie']
+
+    name_to_substitute_tokens_from = ' Mehitabel'
+    name_moniker = get_moniker_from_name(name_to_substitute_tokens_from)
+    assert name_to_substitute_tokens_from[0] == ' '
+
+    tokens_to_substitute = enc.encode(name_to_substitute_tokens_from)
+
+    sentences_with_name_subbed_in = []
+    sentences_with_single_token_subbed_in = defaultdict(list)
+    sentences_with_all_name_tokens_subbed_in = []
+
+    for sentence in sentences:
+
+        token_appears_in_sentence = False
+
+        encoded_sentence = enc.encode(sentence)
+
+        if len(encoded_sentence) < 8:
+            continue
+
+        for token in tokens_to_substitute:
+            if token in encoded_sentence:
+                token_appears_in_sentence = True
+
+        if token_appears_in_sentence:
+            continue
+
+        sentence_with_name_subbed_in = None
+
+        for name in names:
+            name_with_leading_space = f' {name}'
+            if name_with_leading_space in sentence:
+                sentence_with_name_subbed_in = sentence.replace(name_with_leading_space, name_to_substitute_tokens_from)
+                break
+
+        if sentence_with_name_subbed_in is not None:
+            sentences_with_name_subbed_in.append(sentence_with_name_subbed_in)
+
+        for token in tokens_to_substitute:
+            encoded_sentence_copy = encoded_sentence[:]
+            encoded_sentence_copy[random.randint(0, len(encoded_sentence_copy) - 1)] = token
+            sentence_with_single_token_subbed_in = enc.decode(encoded_sentence_copy)
+            sentences_with_single_token_subbed_in[token].append(sentence_with_single_token_subbed_in)
+        
+        encoded_sentence_copy = encoded_sentence[:]
+        print(encoded_sentence_copy)
+        print(tokens_to_substitute)
+        indices_to_replace = random.sample(range(len(encoded_sentence_copy)), len(tokens_to_substitute))
+        for token, index in zip(tokens_to_substitute, indices_to_replace):
+            encoded_sentence_copy[index] = token
+        sentence_with_all_name_tokens_subbed_in = enc.decode(encoded_sentence_copy)
+        sentences_with_all_name_tokens_subbed_in.append(sentence_with_all_name_tokens_subbed_in)
+
+    pickle.dump(sentences_with_name_subbed_in, open(f'sentences_with_name_subbed_in{name_moniker}.p', 'wb'))
+    pickle.dump(sentences_with_single_token_subbed_in, open(f'sentences_with_single_token_subbed_in{name_moniker}.p', 'wb'))
+    pickle.dump(sentences_with_all_name_tokens_subbed_in, open(f'sentences_with_all_name_tokens_subbed_in{name_moniker}.p', 'wb'))
+
+    raise Exception()
+
+if True:
+    import pickle
+    import tiktoken
+    from sklearn import svm
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import classification_report, confusion_matrix
+
+
+    likely_bigram_resids_path = 'likely_bigram_resids.p'
+    likely_bigrams = pickle.load(open(likely_bigram_resids_path, 'rb')) if file_exists(likely_bigram_resids_path) else defaultdict(list)
+
+
+    unlikely_bigram_resids_path = 'unlikely_bigram_resids.p'
+    unlikely_bigrams = pickle.load(open(unlikely_bigram_resids_path, 'rb')) if file_exists(unlikely_bigram_resids_path) else defaultdict(list)
+
+
+    for layer_num in likely_bigrams:
+        print(f'Layer {layer_num}')
+        resids_1 = [x[0].detach().numpy().flatten() for x in likely_bigrams[layer_num]]
+        resids_2 = [x[0].detach().numpy().flatten() for x in unlikely_bigrams[layer_num]]
+
+        all_vectors_np = np.array([*resids_1, *resids_2])
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [1]*len(resids_1) + [0]*len(resids_2)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+        
+        distances = clf.decision_function(X)
+        average_distance = np.mean(np.abs(distances))
+
+        print(average_distance)
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm = w / np.linalg.norm(w)
+
+        for index in range(12):
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array = np.zeros((1, 12, 768))
+
+            # select an index where you want to place your vector
+            # for this example, let's place it at index 5 (0-indexed)
+            # replace the 768-dimension slice at the chosen index with your vector
+            array[0, index, :] = w_norm
+
+            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}.p', 'wb'))
+
+        print(w.shape)
+
+        print(f'Layer {layer_num}')
+        resids_1 = [x[1].detach().numpy().flatten() for x in likely_bigrams[layer_num]]
+        resids_2 = [x[1].detach().numpy().flatten() for x in unlikely_bigrams[layer_num]]
+
+        all_vectors_np = np.array([*resids_1, *resids_2])
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [1]*len(resids_1) + [0]*len(resids_2)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+        
+        distances = clf.decision_function(X)
+        average_distance = np.mean(np.abs(distances))
+
+        print(average_distance)
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm = w / np.linalg.norm(w)
+
+        print(w.shape)
+
+
+        for index in range(12):
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array = np.zeros((1, 12, 768))
+
+            # select an index where you want to place your vector
+            # for this example, let's place it at index 5 (0-indexed)
+            # replace the 768-dimension slice at the chosen index with your vector
+            array[0, index, :] = w_norm
+
+            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}.p', 'wb'))
+
+
+    raise Exception()
+
+
+if True:
+    import pickle
+    import tiktoken
+    enc = tiktoken.get_encoding('r50k_base')
+
+    sentence = 'Jack went to the store, wherehitabel large fish and Me'
+    sentence = 'Jack went to the store, Mehitabel told us. Me'
+    # sentence = 'Jack went to the store, Mehitabel large fish and Me'
+    # sentence = 'Jack went to the store, Mehitabel large fish Mehit'
+    print([enc.decode([i]) for i in enc.encode(sentence)])
+    print(enc.encode(sentence))
+
+    test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+    # print(reference_gpt2.to_str_tokens(test_tokens))
+    demo_logits, _ = demo_gpt2(test_tokens)
+
+    probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+    print(probabilities[enc.encode('abel')[0]])
+    print(probabilities[enc.encode('hit')[0]])
+    print('')
+
+    demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=10, 
+                            #    resid_intervention_filename=f'w_norm_mehitabel_index_8_token_17945.p',
+                               resid_intervention_filename=f'hitabel_intervention.p',                               
+                               intervene_as_fraction_of_resid=0.01)
+
+    probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+    print(probabilities[enc.encode('abel')[0]])
+    print(probabilities[enc.encode('hit')[0]])
+    print('')
+
+    raise Exception()
+
+
+if False:
+    import pickle
+    import tiktoken
+    enc = tiktoken.get_encoding('r50k_base')
+    name_to_substitute_tokens_from = ' Mehitabel'
+    encoded_name = enc.encode(name_to_substitute_tokens_from)
+    name_moniker = get_moniker_from_name(name_to_substitute_tokens_from)
+    directory = 'resids/'
+
+    sentences_with_name_subbed_in = pickle.load(open(f'sentences_with_name_subbed_in{name_moniker}.p', 'rb'))
+    sentences_with_single_token_subbed_in = pickle.load(open(f'sentences_with_single_token_subbed_in{name_moniker}.p', 'rb'))
+    sentences_with_all_name_tokens_subbed_in = pickle.load(open(f'sentences_with_all_name_tokens_subbed_in{name_moniker}.p', 'rb'))
+
+    # def save_layer_resid_as_pickle_file(resid):
+
+
+    for sentence_set, prefix in [(sentences_with_name_subbed_in, f'{directory}resid_with_name_subbed_in'),
+                                 (sentences_with_all_name_tokens_subbed_in, f'{directory}resid_with_all_name_tokens_subbed_in'),
+                                 *[(sentences_with_single_token_subbed_in[key], f'{directory}resid_with_single_token_subbed_in') for key in encoded_name]]:
+        print(prefix)
+        for i, sentence in enumerate(sentence_set):
+            if i % 100 == 0:
+                print(i)
+                print(sentence)
+
+            encoded_sentence = enc.encode(sentence)
+
+            test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+            _, all_resids = demo_gpt2(test_tokens)
+            for j, resid in enumerate(all_resids):
+                # print(resid.shape)
+                # print(encoded_sentence)
+                # print(test_tokens.shape)
+
+                assert resid.shape[1] == len(encoded_sentence) + 1
+                for k, t in enumerate(encoded_sentence):
+                    assert t == test_tokens[0, k+1]
+
+                for name_token in encoded_name:
+                    for k, sentence_token in enumerate(encoded_sentence):
+                        if sentence_token == name_token:
+                            if j == 0:
+                                filename = f'{prefix}_sentence_{i}_token_{name_token}_layer_start.p'
+                            else:
+                                filename = f'{prefix}_sentence_{i}_token_{name_token}_layer_{j-1}.p'
+                            pickle.dump(resid[0, k+1, :], open(filename, 'wb'))
+
+    raise Exception()
+
+
+if False:
+    import pickle
+    import tiktoken
+    enc = tiktoken.get_encoding('r50k_base')
+    name_to_substitute_tokens_from = ' Mehitabel'
+    encoded_name = enc.encode(name_to_substitute_tokens_from)
+    name_moniker = get_moniker_from_name(name_to_substitute_tokens_from)
+
+    directory = 'resids/'
+
+    sentences_with_name_subbed_in = pickle.load(open(f'sentences_with_name_subbed_in{name_moniker}.p', 'rb'))
+    sentences_with_single_token_subbed_in = pickle.load(open(f'sentences_with_single_token_subbed_in{name_moniker}.p', 'rb'))
+    sentences_with_all_name_tokens_subbed_in = pickle.load(open(f'sentences_with_all_name_tokens_subbed_in{name_moniker}.p', 'rb'))
+
+    resids = {}
+
+    for sentence_set, prefix in [(sentences_with_name_subbed_in, f'{directory}resid_with_name_subbed_in'),
+                                 (sentences_with_all_name_tokens_subbed_in, f'{directory}resid_with_all_name_tokens_subbed_in'),
+                                 *[(sentences_with_single_token_subbed_in[key], f'{directory}resid_with_single_token_subbed_in') for key in encoded_name]]:
+        print(prefix)
+        if prefix not in resids:
+            resids[prefix] = {}
+
+        for i, sentence in enumerate(sentence_set):
+            if i % 100 == 0:
+                print(i)
+                print(sentence)
+
+            encoded_sentence = enc.encode(sentence)
+
+            for j in range(13):
+                j_name = 'start' if j == 0 else j-1
+                if j_name not in resids[prefix]:
+                    resids[prefix][j_name] = defaultdict(list)
+                # print(resid.shape)
+                # print(encoded_sentence)
+                # print(test_tokens.shape)
+
+                for name_token in encoded_name:
+                    for k, sentence_token in enumerate(encoded_sentence):
+                        if sentence_token == name_token:
+                            if j == 0:
+                                filename = f'{prefix}_sentence_{i}_token_{name_token}_layer_start.p'
+                            else:
+                                filename = f'{prefix}_sentence_{i}_token_{name_token}_layer_{j-1}.p'
+
+                            resid = pickle.load(open(filename, 'rb'))    
+                            resids[prefix][j_name][name_token].append(resid)
+
+    for sentence_set, prefix in [(sentences_with_name_subbed_in, f'{directory}resid_with_name_subbed_in'),
+                                 (sentences_with_all_name_tokens_subbed_in, f'{directory}resid_with_all_name_tokens_subbed_in'),
+                                 *[(sentences_with_single_token_subbed_in[key], f'{directory}resid_with_single_token_subbed_in') for key in encoded_name]]:
+        for j in range(13):
+            j_name = 'start' if j == 0 else j-1
+            for token in encoded_name:
+                # print(resid.shape)
+                # print(encoded_sentence)
+                # print(test_tokens.shape)
+                print(f'dumping {prefix} {j} {token}')
+
+                pickle.dump(resids[prefix][j_name][token], open(f'{prefix}_{j_name}_{token}_all_resids.p', 'wb'))
+
+    raise Exception()
+
+if False:
+    import pickle
+    import tiktoken
+    from sklearn import svm
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import classification_report, confusion_matrix
+
+    directory = 'resids/'
+    j = 11
+    j_name = 'start' if j == 0 else j-1
+    name_to_substitute_tokens_from = ' Mehitabel'
+    moniker = get_moniker_from_name(name_to_substitute_tokens_from)
+    enc = tiktoken.get_encoding('r50k_base')
+    encoded_name = enc.encode(name_to_substitute_tokens_from)
+
+    for token in encoded_name:
+        prefix = f'{directory}resid_with_name_subbed_in'
+        resids_name_subbed_in = pickle.load(open(f'{prefix}_{j_name}_{token}_all_resids.p', 'rb'))
+
+        prefix_2 = f'{directory}resid_with_single_token_subbed_in'
+        # prefix_2 = f'{directory}resid_with_all_name_tokens_subbed_in'
+        resids_single_token_subbed_in = pickle.load(open(f'{prefix_2}_{j_name}_{token}_all_resids.p', 'rb'))
+
+        resids_1 = [x.detach().numpy().flatten() for x in resids_name_subbed_in]
+        resids_2 = [x.detach().numpy().flatten() for x in resids_single_token_subbed_in]
+
+        all_vectors_np = np.array([*resids_1, *resids_2])
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [1]*len(resids_1) + [0]*len(resids_2)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+        
+        distances = clf.decision_function(X)
+        average_distance = np.mean(np.abs(distances))
+
+        print(average_distance)
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm = w / np.linalg.norm(w)
+
+        print(w.shape)
+
+
+        for index in range(14):
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array = np.zeros((1, 14, 768))
+
+            # select an index where you want to place your vector
+            # for this example, let's place it at index 5 (0-indexed)
+            # replace the 768-dimension slice at the chosen index with your vector
+            array[0, index, :] = w_norm
+
+            pickle.dump(array, open(f'w_norm{moniker}_index_{index}_token_{token}.p', 'wb'))
+
+        # w_norm_reshaped = np.reshape(w_norm, all_resid_streams[layer_index][0].shape)
+        # print(w_norm_reshaped)
+
+        # pickle.dump(w_norm_reshaped, open(f'w_norm_sentence_completeness_layer_{layer_index}.p', 'wb'))
+
+
+    raise Exception()
+
+if False:
+    import pickle
+    from math import sqrt
+    intervention1 = pickle.load(open('w_norm_mehitabel_index_8_token_17945.p', 'rb'))
+    intervention2 = pickle.load(open('w_norm_mehitabel_index_9_token_9608.p', 'rb'))
+    pickle.dump(intervention1 + intervention2 / sqrt(2), open('hitabel_intervention.p', 'wb'))
+    raise Exception()
+
+
+if False:
+    import pickle
+    import tiktoken
+    enc = tiktoken.get_encoding('r50k_base')
+
+    sentence = 'Jack went to the store, wherehitabel large fish and Me'
+    sentence = 'Jack went to the store, Mehitabel told us. Me'
+    # sentence = 'Jack went to the store, Mehitabel large fish and Me'
+    # sentence = 'Jack went to the store, Mehitabel large fish Mehit'
+    print([enc.decode([i]) for i in enc.encode(sentence)])
+    print(enc.encode(sentence))
+
+    test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+    # print(reference_gpt2.to_str_tokens(test_tokens))
+    demo_logits, _ = demo_gpt2(test_tokens)
+
+    probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+    print(probabilities[enc.encode('abel')[0]])
+    print(probabilities[enc.encode('hit')[0]])
+    print('')
+
+    demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=10, 
+                            #    resid_intervention_filename=f'w_norm_mehitabel_index_8_token_17945.p',
+                               resid_intervention_filename=f'hitabel_intervention.p',                               
+                               intervene_as_fraction_of_resid=0.01)
+
+    probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+    print(probabilities[enc.encode('abel')[0]])
+    print(probabilities[enc.encode('hit')[0]])
+    print('')
+
+    raise Exception()
+
+
+if False:
+    import pickle
+    import tiktoken
+    from collections import defaultdict
+
+    # sentences = pickle.load(open('eight_token_sentences.p', 'rb'))
+
+    # all_path = 'eight_token_resid_streams.p'
+    index_to_sentence_path = 'eight_token_index_to_sentence.p'
+
+    # index_to_sentence_with_mehitabel_path = '10_token_index_to_sentence_with_mehitabel.p'
+
+    index_to_completeness_path = 'eight_token_index_to_completeness.p'
+
+    index_to_sentence = pickle.load(open(index_to_sentence_path, 'rb'))
+    index_to_completeness = pickle.load(open(index_to_completeness_path, 'rb'))
+
+    # male_resid_streams = pickle.load(open(male_path, 'rb')) if file_exists(male_path) else defaultdict(list)
+    # female_resid_streams = pickle.load(open(female_path, 'rb')) if file_exists(female_path) else defaultdict(list)
+    # all_resid_streams = pickle.load(open(all_path, 'rb')) if file_exists(all_path) else defaultdict(list)
+
+    # index_to_sentence = pickle.load(open(index_to_sentence_path, 'rb')) if file_exists(index_to_sentence_path) else {}
+    # index_to_sentence_with_mehitabel = pickle.load(open(index_to_sentence_with_mehitabel_path, 'rb')) if file_exists(index_to_completeness_path) else {}
+
+
+    # def add_streams_to_storage(streams, stream_storage):
+    #     stream_storage['start'].append(streams[0])
+    #     for i, stream in enumerate(streams[1:]):
+    #         stream_storage[i].append(stream)
+
+
+    # seen_last_halt_point = False
+
+    pre_interventions = []
+    post_interventions = []
+
+    from math import log
+
+    for i, sentence in index_to_sentence.items():
+        if i > 100:
+            break
+        # print(i)
+
+        enc = tiktoken.get_encoding('r50k_base')
+        if len(enc.encode(sentence)) != 8:
+            continue
+
+        # if i < 2800:
+        #     continue
+
+
+        # if 'Patrick sat gazing into space' in sentence:
+        #     seen_last_halt_point = True            
+        # if not seen_last_halt_point:
+        #     continue
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+        # print(reference_gpt2.to_str_tokens(test_tokens))
+        demo_logits, _ = demo_gpt2(test_tokens)
+
+        probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+        # if probabilities[0] > 0.05:
+        #     # Is or could be a complete sentence
+        #     index_to_completeness[i] = 1
+        # else:
+        #     index_to_completeness[i] = 0
+
+        # print(sentence)
+        # print(probabilities)
+        # print(probabilities.shape)
+        # print(probabilities[13])
+        token_index = 13
+        pre_interventions.append(log(probabilities[token_index]))
+
+        # for j in range(11):
+        #     plt.plot(pickle.load(open(f'w_norm_sentence_completeness_layer_{j}.p', 'rb')).flatten())
+        #     plt.show()
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+        # print(reference_gpt2.to_str_tokens(test_tokens))
+        demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=10, 
+                                #    resid_intervention_filename='w_norm_sentence_completeness_layer_10.p',
+                                   resid_intervention_filename='period_intervention.p',
+                                   intervene_as_fraction_of_resid=0.01)
+
+        probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+        post_interventions.append(log(probabilities[token_index]))
+
+        # if probabilities[0] > 0.05:
+        #     # Is or could be a complete sentence
+        #     index_to_completeness[i] = 1
+        # else:
+        #     index_to_completeness[i] = 0
+
+        # print(sentence)
+        # print(probabilities)
+        # print(probabilities.shape)
+        # print(probabilities[13])        
+
+        # add_streams_to_storage(resid_streams, all_resid_streams)
+
+        # index_to_sentence[len(all_resid_streams[0]) - 1] = sentence
+
+        if i % 50 == 0:
+            print(i)
+            # # pickle.dump(male_resid_streams, open(male_path, 'wb'))
+            # # pickle.dump(female_resid_streams, open(female_path, 'wb'))
+            # pickle.dump(all_resid_streams, open(all_path, 'wb'))
+            # pickle.dump(index_to_completeness, open(index_to_completeness_path, 'wb'))
+
+    print([y-x for x, y in zip(pre_interventions, post_interventions)])
+
+    print(pre_interventions)
+
+    # Define the number of bins you want
+    num_bins = 10
+
+    # Compute the bins for the pre-interventions data
+    bins = np.linspace(min(pre_interventions), max(pre_interventions), num_bins+1)
+
+    # Compute the indices of the bins each value belongs to
+    indices = np.digitize(pre_interventions, bins)
+
+    # Calculate the average differences for each bin
+    avg_diffs = []
+    bin_labels = []
+    for i in range(1, num_bins+1):
+        mask = indices == i
+        avg_diff = np.mean(np.array(post_interventions)[mask] - np.array(pre_interventions)[mask])
+        avg_diffs.append(avg_diff)
+        bin_labels.append(round((bins[i-1] + bins[i])/2, 2))  # Use the midpoint of each bin for the label
+
+    # Plot the bar chart
+    plt.bar(bin_labels, avg_diffs, width=np.diff(bins), align='center')
+    plt.xlabel('pre intervention logprob')
+    plt.ylabel('Average of (post intervention - pre intervention) logprob')
+    plt.title('naive vector intervention at layer 10, intervention norm = 0.01 * |resid|')
+    plt.show()
 
 
 
@@ -1226,6 +2055,145 @@ if False:
         print(w_norm_reshaped)
 
         pickle.dump(w_norm_reshaped, open(f'w_norm_sentence_completeness_layer_{layer_index}.p', 'wb'))
+
+
+    raise Exception()
+
+
+if False:
+    import pickle
+    from sklearn.decomposition import PCA
+    from collections import defaultdict
+
+    from sklearn import svm
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import classification_report, confusion_matrix
+    import numpy as np
+    from imblearn.over_sampling import SMOTE
+
+    # Then use X_train_res and y_train_res to train your model
+
+
+    resids_without_mehitabel_path = '10_token_resid_streams.p'
+    resids_with_mehitabel_path = '10_token_resid_streams_with_mehitabel.p'
+    resids_without_mehitabel = pickle.load(open(resids_without_mehitabel_path, 'rb')) if file_exists(resids_without_mehitabel_path) else defaultdict(list)
+    resids_with_mehitabel = pickle.load(open(resids_with_mehitabel_path, 'rb')) if file_exists(resids_with_mehitabel_path) else defaultdict(list)
+
+    index_to_sentence_without_mehitabel = pickle.load(open('10_index_to_sentence.p', 'rb'))
+    index_to_sentence_with_mehitabel = pickle.load(open('10_index_to_sentence_with_mehitabel.p', 'rb'))
+
+    for layer_index in range(11):
+        print(f'Layer {layer_index}')
+
+        without_mehitabel_vectors = [m.detach().numpy().flatten() for m in resids_without_mehitabel[layer_index]]
+        with_mehitabel_vectors = [m.detach().numpy().flatten() for m in resids_with_mehitabel[layer_index]]
+
+        without_mehitabel_vectors_fixed = [v for v in without_mehitabel_vectors if len(v) == 8448]
+        with_mehitabel_vectors_fixed = [v for v in with_mehitabel_vectors if len(v) == 8448]
+
+        # all_resids = [*resids_with_mehitabel[layer_index], *resids_without_mehitabel[layer_index]]
+        all_vectors = [*without_mehitabel_vectors_fixed, *with_mehitabel_vectors_fixed]
+        
+        print([len(x) for x in all_vectors])
+        print(len(all_vectors))
+
+        # print(len(all_vectors))
+
+        # Get vectors of a fixed length
+        # all_vectors_indices_fixed = [j for j, v in enumerate(all_vectors) if len(v) == 6912]
+        # all_vectors_fixed = [v for v in all_vectors if len(v) == 6912]
+
+        # print(len(all_vectors_fixed))
+
+        # print(len(index_to_completeness))
+        # print(len(index_to_sentence))
+
+        all_vectors_np = np.array(all_vectors)
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [0]*len(without_mehitabel_vectors_fixed) + [1]*len(with_mehitabel_vectors_fixed)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+
+        # Obtain the indices of the test set
+        _, test_idx, _, _ = train_test_split(range(len(X)), y, test_size=0.2, random_state=42)
+
+        # Predict labels for the test set
+        y_pred = clf.predict(X_test)
+
+        # Find false positives
+        FP = np.nonzero((y_pred == 1) & (y_test == 0))[0]
+        FP_original_indices = [test_idx[j] for j in FP]
+
+        # Find false negatives
+        FN = np.nonzero((y_pred == 0) & (y_test == 1))[0]
+        FN_original_indices = [test_idx[j] for j in FN]
+
+        # print(f"Indices of false positives in original data: {FP_original_indices}")
+        # for j in FP_original_indices:
+        #     print(index_to_sentence[all_vectors_indices_fixed[j]])
+
+        # print(f"Indices of false negatives in original data: {FN_original_indices}")
+
+        # for j in FN_original_indices:
+        #     print(index_to_sentence[all_vectors_indices_fixed[j]])
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm = w / np.linalg.norm(w)
+
+        w_norm_reshaped = np.reshape(w_norm, resids_with_mehitabel[layer_index][0].shape)
+        print(w_norm_reshaped)
+
+        pickle.dump(w_norm_reshaped, open(f'w_norm_sentence_mehitabelness_layer_{layer_index}.p', 'wb'))
 
 
     raise Exception()
