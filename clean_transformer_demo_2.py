@@ -37,6 +37,10 @@ from typing import Optional
 import string
 import random
 from collections import defaultdict
+import tiktoken
+
+enc = tiktoken.get_encoding('r50k_base')
+import pickle
 
 
 def alphabetic_rank(word):
@@ -51,6 +55,8 @@ def alphabetic_rank(word):
         
         current_letter_value *= 1/26
     return rank
+
+
 
 
 # import IPython
@@ -1248,12 +1254,13 @@ if False:
 
     raise Exception()
 
-if True:
+if False:
     import pickle
     import tiktoken
     from sklearn import svm
     from sklearn.model_selection import train_test_split
     from sklearn.metrics import classification_report, confusion_matrix
+    from math import sqrt
 
 
     likely_bigram_resids_path = 'likely_bigram_resids.p'
@@ -1331,7 +1338,7 @@ if True:
         w = clf.coef_[0]
 
         # Normalize the weight vector.
-        w_norm = w / np.linalg.norm(w)
+        w_norm_1 = w / np.linalg.norm(w)
 
         for index in range(12):
             # initialize a numpy array of shape (1, 12, 768) filled with zeros
@@ -1340,9 +1347,9 @@ if True:
             # select an index where you want to place your vector
             # for this example, let's place it at index 5 (0-indexed)
             # replace the 768-dimension slice at the chosen index with your vector
-            array[0, index, :] = w_norm
+            array[0, index, :] = w_norm_1
 
-            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}.p', 'wb'))
+            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}_layer_{layer_num}.p', 'wb'))
 
         print(w.shape)
 
@@ -1412,7 +1419,7 @@ if True:
         w = clf.coef_[0]
 
         # Normalize the weight vector.
-        w_norm = w / np.linalg.norm(w)
+        w_norm_2 = w / np.linalg.norm(w)
 
         print(w.shape)
 
@@ -1424,21 +1431,495 @@ if True:
             # select an index where you want to place your vector
             # for this example, let's place it at index 5 (0-indexed)
             # replace the 768-dimension slice at the chosen index with your vector
-            array[0, index, :] = w_norm
+            array[0, index, :] = w_norm_2
 
-            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}.p', 'wb'))
+            pickle.dump(array, open(f'w_norm_bigram_second_index_{index}_layer_{layer_num}.p', 'wb'))
+
+
+        for index in range(11):
+            array = np.zeros((1, 12, 768))
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array[0, index, :] = w_norm_1
+            array[0, index+1, :] = w_norm_2
+
+            pickle.dump(array/sqrt(2), open(f'w_norm_bigram_both_indices_{index}_layer_{layer_num}.p', 'wb'))
 
 
     raise Exception()
 
 
-if True:
+if False:
+    inp = open('phrases.txt', 'r')
+
+    input_string = inp.read()
+
+    def parse_strings(input_string):
+        # Split the input string into lines
+        lines = input_string.split("\n")
+
+        # Initialize the output list
+        output_list = []
+
+        # Iterate over the lines
+        for i in range(0, len(lines), 4):
+            # Remove the 'Phrase: ' prefix and store the phrase
+            phrase = lines[i].replace('Phrase: "', '').replace('"', '')
+            if not 'French' in phrase:
+                phrase = phrase.lower()
+
+            # Remove the 'Sentence 1: ' prefix and store the first sentence
+            sentence_1 = lines[i + 1].replace('Sentence 1: "', '').replace('"', '')
+
+            # Remove the 'Sentence 2: ' prefix and store the second sentence
+            sentence_2 = lines[i + 2].replace('Sentence 2: "', '').replace('"', '')
+
+            # Append the tuple to the list
+            output_list.append((phrase, sentence_1, sentence_2))
+
+        return output_list
+    
+    unprocessed_strings = parse_strings(input_string)
+    processed_strings = []
+
+    for phrase, sentence1, sentence2 in unprocessed_strings:
+        processed_strings.append((f' {phrase}', f' {sentence1}', f' {sentence2}'))
+
+        processed_phrase, processed_sentence1, processed_sentence2 = processed_strings[-1]
+
+        encoded_phrase = enc.encode(processed_phrase)
+
+        for token in encoded_phrase:
+            print([enc.decode([i]) for i in enc.encode(processed_phrase)])
+            print([enc.decode([i]) for i in enc.encode(processed_sentence1)])
+            print([enc.decode([i]) for i in enc.encode(processed_sentence2)])
+            assert enc.encode(processed_sentence1).count(token) == 1
+            assert enc.encode(processed_sentence2).count(token) == 1
+            assert enc.encode(processed_sentence1)[-1] == enc.encode('.')[0]
+            assert enc.encode(processed_sentence2)[-1] == enc.encode('.')[0]
+    
+    pickle.dump(processed_strings, open('two_word_phrase_sentences.p', 'wb'))
+
+    raise Exception()
+
+
+if False:
+    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+ 
+    likely_bigram_resids_to_add_to_storage = defaultdict(list)
+    unlikely_bigram_resids_to_add_to_storage = defaultdict(list)
+
+    also_do_unlikely = False
+
+    for i, sentence in enumerate(sentences):
+        encoded_sentence = enc.encode(sentence)
+        for j, token_to_repeat in enumerate(encoded_sentence[:-1]):
+            token_following_token_to_repeat = encoded_sentence[j+1]
+
+            encoded_sentence_with_token_repeated = [*encoded_sentence, token_to_repeat]
+            sentence_with_token_repeated = enc.decode(encoded_sentence_with_token_repeated)
+
+            test_tokens = cuda(reference_gpt2.to_tokens(sentence_with_token_repeated))
+
+            demo_logits, all_resids = demo_gpt2(test_tokens)
+
+            probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+            # print(sentence)
+            # print(sentence_with_token_repeated)
+            # print(probabilities[token_to_repeat])
+            # print(probabilities[token_following_token_to_repeat])
+
+            if probabilities[token_following_token_to_repeat] > 0.9:
+                # print(sentence)
+                # print(sentence_with_token_repeated)
+                # print(f'Likely bigram: {enc.decode([token_to_repeat, token_following_token_to_repeat])}')
+                # print(probabilities[token_following_token_to_repeat])
+            
+                for k, resid in enumerate(all_resids):
+                    likely_bigram_resids_to_add_to_storage[k].append((resid[0, j+1, :], resid[0, j+2, :], sentence_with_token_repeated, j))
+                    
+
+            if probabilities[token_following_token_to_repeat] < 0.1 and also_do_unlikely:
+                # print(sentence)
+                # print(sentence_with_token_repeated)
+                # print(f'Unlikely bigram: {enc.decode([token_to_repeat, token_following_token_to_repeat])}')
+                # print(probabilities[token_following_token_to_repeat])                
+
+                for k, resid in enumerate(all_resids):
+                    unlikely_bigram_resids_to_add_to_storage[k].append((resid[0, j+1, :], resid[0, j+2, :], sentence_with_token_repeated, j))
+
+        if i % 25 == 0:
+            print(i)
+
+            likely_bigram_resids_path = 'likely_bigram_resids.p'
+            stored_likely_bigrams = pickle.load(open(likely_bigram_resids_path, 'rb')) if file_exists(likely_bigram_resids_path) else defaultdict(list)
+            for key in likely_bigram_resids_to_add_to_storage:
+                stored_likely_bigrams[key].extend(likely_bigram_resids_to_add_to_storage[key])
+            pickle.dump(stored_likely_bigrams, open(likely_bigram_resids_path, 'wb'))
+
+
+            if also_do_unlikely:
+                unlikely_bigram_resids_path = 'unlikely_bigram_resids.p'
+                stored_unlikely_bigrams = pickle.load(open(unlikely_bigram_resids_path, 'rb')) if file_exists(unlikely_bigram_resids_path) else defaultdict(list)
+                for key in unlikely_bigram_resids_to_add_to_storage:
+                    stored_unlikely_bigrams[key].extend(unlikely_bigram_resids_to_add_to_storage[key])
+                pickle.dump(stored_unlikely_bigrams, open(unlikely_bigram_resids_path, 'wb'))
+
+            likely_bigram_resids_to_add_to_storage = defaultdict(list)
+            unlikely_bigram_resids_to_add_to_storage = defaultdict(list)
+            stored_likely_bigrams = None
+            stored_unlikely_bigrams = None    
+
+
+if False:
+    import pickle
+    import tiktoken
+    sentences = pickle.load(open('two_word_phrase_sentences.p', 'rb'))
+    enc = tiktoken.get_encoding('r50k_base')
+ 
+    sentence = ' Hello my name'
+
+
+    test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+    # print(reference_gpt2.to_str_tokens(test_tokens))
+    demo_logits, _ = demo_gpt2(test_tokens)
+
+    probabilities = torch.nn.functional.softmax(demo_logits[-1,-3], dim=0).detach().numpy()
+
+    topk_indices = np.argpartition(probabilities, -10)[-10:]
+    # Get the top 10 probabilities
+    topk_probabilities = probabilities[topk_indices]
+    # Get the top 10 tokens
+    topk_tokens = [enc.decode([i]) for i in topk_indices]
+
+    # Print the top 10 tokens and their probabilities
+    for token, probability in zip(topk_tokens, topk_probabilities):
+        print(f"Token: {token}, Probability: {probability}")    
+
+
+    raise Exception()
+
+
+
+if False:
+    import pickle
+    import tiktoken
+    sentences = pickle.load(open('two_word_phrase_sentences.p', 'rb'))
+    enc = tiktoken.get_encoding('r50k_base')
+ 
+    # likely_bigram_resids_to_add_to_storage = defaultdict(list)
+    # unlikely_bigram_resids_to_add_to_storage = defaultdict(list)
+
+    curated_sentences = []
+
+    for phrase, sentence1, sentence2 in sentences:
+        encoded_the = enc.encode(' The')[0]
+        encoded_phrase = enc.encode(phrase)
+        encoded_sentence1 = enc.encode(sentence1)
+        encoded_sentence2 = enc.encode(sentence2)
+
+        if phrase != ' landing page':
+            continue
+
+        sentence1_with_prompt = enc.decode([*encoded_sentence1, encoded_the, encoded_phrase[0]])
+        sentence2_with_prompt = enc.decode([*encoded_sentence2, encoded_the, encoded_phrase[0]])
+
+        print(sentence1_with_prompt)
+        print(sentence2_with_prompt)
+        print(enc.decode([encoded_phrase[1]]))
+
+
+        print(len(encoded_sentence1))
+        index = 4
+        layer_num = 9
+
+        # index = 
+        intervention_filename = f'w_norm_sentence_comparing_both_indices_{index}_layer_{layer_num}.p'
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence1_with_prompt))
+        # print(reference_gpt2.to_str_tokens(test_tokens))
+        demo_logits, _ = demo_gpt2(test_tokens)
+
+        probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+        prob1 = probabilities[encoded_phrase[1]]
+
+        print(len(test_tokens[0]))
+
+        if len(test_tokens[0]) == 16:
+            print('hello')
+            test_tokens = cuda(reference_gpt2.to_tokens(sentence1_with_prompt))
+            # print(reference_gpt2.to_str_tokens(test_tokens))
+            demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=9, 
+                                       resid_intervention_filename=intervention_filename, 
+                                       intervene_as_fraction_of_resid=-10)
+
+            probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+            prob_extra = probabilities[encoded_phrase[1]]
+
+            print(prob_extra)
+
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence2_with_prompt))
+        # print(reference_gpt2.to_str_tokens(test_tokens))
+        demo_logits, _ = demo_gpt2(test_tokens)
+
+        probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
+
+        prob2 = probabilities[encoded_phrase[1]]
+
+        print(prob1, prob2)
+
+        if prob2 < prob1 / 4:
+            curated_sentences.append((phrase, sentence1, sentence2))
+
+    # pickle.dump(curated_sentences, open('two_word_phrase_sentences.p', 'wb'))
+
+    raise Exception()
+
+if False:
+
+    import pickle
+    import tiktoken
+    sentences = pickle.load(open('two_word_phrase_sentences.p', 'rb'))
+
+
+    sentence1_resids = defaultdict(list)
+    sentence2_resids = defaultdict(list)
+
+
+    for phrase, sentence1, sentence2 in sentences:
+        encoded_sentence1 = enc.encode(sentence1)
+        encoded_sentence2 = enc.encode(sentence2)
+        encoded_phrase = enc.encode(phrase)
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence1))
+
+        token1_position = encoded_sentence1.index(encoded_phrase[0])
+        token2_position = encoded_sentence1.index(encoded_phrase[1])
+
+        assert token2_position == token1_position + 1
+
+        _, all_resids = demo_gpt2(test_tokens)
+        
+        for k, resid in enumerate(all_resids):
+            sentence1_resids[k].append((resid[0, token1_position+1, :], resid[0, token2_position+1, :], sentence1, phrase))
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence2))
+
+        token1_position = encoded_sentence2.index(encoded_phrase[0])
+        token2_position = encoded_sentence2.index(encoded_phrase[1])
+
+        _, all_resids = demo_gpt2(test_tokens)
+        
+        for k, resid in enumerate(all_resids):
+            sentence2_resids[k].append((resid[0, token1_position+1, :], resid[0, token2_position+1, :], sentence2, phrase))
+
+
+    pickle.dump(sentence1_resids, open('sentence1_resids.p', 'wb'))
+    pickle.dump(sentence2_resids, open('sentence2_resids.p', 'wb'))
+
+
+if False:
+    import pickle
+    import tiktoken
+    from sklearn import svm
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import classification_report, confusion_matrix
+    from math import sqrt
+
+
+    sentence1_resids_path = 'sentence1_resids.p'
+    sentence1_bigrams = pickle.load(open(sentence1_resids_path, 'rb')) if file_exists(sentence1_resids_path) else defaultdict(list)
+
+
+    sentence2_resids_path = 'sentence2_resids.p'
+    sentence2_bigrams = pickle.load(open(sentence2_resids_path, 'rb')) if file_exists(sentence2_resids_path) else defaultdict(list)
+
+
+    for layer_num in sentence1_bigrams:
+        print(f'Layer {layer_num}')
+        resids_1 = [x[0].detach().numpy().flatten() for x in sentence1_bigrams[layer_num]]
+        resids_2 = [x[0].detach().numpy().flatten() for x in sentence2_bigrams[layer_num]]
+
+        all_vectors_np = np.array([*resids_1, *resids_2])
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [1]*len(resids_1) + [0]*len(resids_2)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+        
+        distances = clf.decision_function(X)
+        average_distance = np.mean(np.abs(distances))
+
+        print(average_distance)
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm_1 = w / np.linalg.norm(w)
+
+        for index in range(14):
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array = np.zeros((1, 14, 768))
+
+            # select an index where you want to place your vector
+            # for this example, let's place it at index 5 (0-indexed)
+            # replace the 768-dimension slice at the chosen index with your vector
+            array[0, index, :] = w_norm_1
+
+            pickle.dump(array, open(f'w_norm_sentence_comparing_first_index_{index}_layer_{layer_num}.p', 'wb'))
+
+        print(w.shape)
+
+        print(f'Layer {layer_num}')
+        resids_1 = [x[1].detach().numpy().flatten() for x in sentence1_bigrams[layer_num]]
+        resids_2 = [x[1].detach().numpy().flatten() for x in sentence2_bigrams[layer_num]]
+
+        all_vectors_np = np.array([*resids_1, *resids_2])
+
+        # Center the data
+        all_vectors_np_centered = all_vectors_np - np.mean(all_vectors_np, axis=0)
+        
+        # Add corresponding mehitabelness values
+        mehitabelness = [1]*len(resids_1) + [0]*len(resids_2)
+
+        # random.shuffle(completeness)
+
+        # Combine all the centered vectors
+        # X = np.concatenate(all_vectors_np_centered_list, axis=0)
+        X = all_vectors_np_centered
+
+        # # Perform PCA on the data
+        # pca = PCA(n_components=2000)
+        # X_pca = pca.fit_transform(X)
+
+        # Convert completeness list to a numpy array
+        y = np.array(mehitabelness)
+
+        print(X.shape)
+        print(y.shape)
+
+        # print(X_pca.shape)
+
+        print('hello')
+
+        # Split the data into training and testing sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+        # # Initialize the SMOTE object
+        # sm = SMOTE(random_state=42)
+
+        # Resample the training set
+        # X_train_res, y_train_res = sm.fit_resample(X_train, y_train)
+
+        # Initialize the SVC object
+        # clf = svm.LinearSVC(class_weight={0:1000, 1:1})
+        # clf = svm.LinearSVC()
+        clf = svm.SVC(max_iter=1000, kernel='linear', class_weight='balanced')
+
+        # Train the model
+        clf.fit(X_train, y_train)
+
+        # Test the model
+        y_pred = clf.predict(X_test)
+
+        # Print the classification report and confusion matrix
+        print(classification_report(y_test, y_pred))
+        print(confusion_matrix(y_test, y_pred))
+        
+        distances = clf.decision_function(X)
+        average_distance = np.mean(np.abs(distances))
+
+        print(average_distance)
+
+        # Obtain the weights (coefficients) of the SVM model.
+        w = clf.coef_[0]
+
+        # Normalize the weight vector.
+        w_norm_2 = w / np.linalg.norm(w)
+
+        for index in range(14):
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array = np.zeros((1, 14, 768))
+
+            # select an index where you want to place your vector
+            # for this example, let's place it at index 5 (0-indexed)
+            # replace the 768-dimension slice at the chosen index with your vector
+            array[0, index, :] = w_norm_1
+
+            pickle.dump(array, open(f'w_norm_sentence_comparing_second_index_{index}_layer_{layer_num}.p', 'wb'))
+
+        for index in range(15):
+            array = np.zeros((1, 16, 768))
+            # initialize a numpy array of shape (1, 12, 768) filled with zeros
+            array[0, index, :] = w_norm_1
+            array[0, index+1, :] = w_norm_2
+
+            pickle.dump(array/sqrt(2), open(f'w_norm_sentence_comparing_both_indices_{index}_layer_{layer_num}.p', 'wb'))
+
+
+    raise Exception()
+
+
+
+if False:
     import pickle
     import tiktoken
     enc = tiktoken.get_encoding('r50k_base')
 
-    sentence = 'Jack went to the store, wherehitabel large fish and Me'
-    sentence = 'Jack went to the store, Mehitabel told us. Me'
+    # sentence = 'Jack went to the store, wherehitabel large fish and Me'
+    # sentence = 'Jack went to the store, Mehitabel told us. Me'
+
+    sentence = 'The Late Show was presented by Cynthia Rose tonight. presented'
     # sentence = 'Jack went to the store, Mehitabel large fish and Me'
     # sentence = 'Jack went to the store, Mehitabel large fish Mehit'
     print([enc.decode([i]) for i in enc.encode(sentence)])
@@ -1450,19 +1931,17 @@ if True:
 
     probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
 
-    print(probabilities[enc.encode('abel')[0]])
-    print(probabilities[enc.encode('hit')[0]])
+    print(probabilities[enc.encode(' by')[0]])
     print('')
 
-    demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=10, 
+    demo_logits, _ = demo_gpt2(test_tokens, intervene_in_resid_at_layer=3, 
                             #    resid_intervention_filename=f'w_norm_mehitabel_index_8_token_17945.p',
-                               resid_intervention_filename=f'hitabel_intervention.p',                               
+                               resid_intervention_filename=f'w_norm_bigram_both_indices_5_layer_4.p',                               
                                intervene_as_fraction_of_resid=0.01)
 
     probabilities = torch.nn.functional.softmax(demo_logits[-1,-1], dim=0).detach().numpy()
 
-    print(probabilities[enc.encode('abel')[0]])
-    print(probabilities[enc.encode('hit')[0]])
+    print(probabilities[enc.encode(' by')[0]])
     print('')
 
     raise Exception()
@@ -2200,7 +2679,7 @@ if False:
 
 
 
-if False:
+if True:
     import pickle
     from sklearn.decomposition import PCA
     from collections import defaultdict
