@@ -1572,6 +1572,120 @@ if False:
 
 
 if False:
+    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+ 
+    resids_to_add_to_storage = defaultdict(list)
+
+    for i, sentence in enumerate(sentences[:500]):
+        encoded_sentence = enc.encode(sentence)
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+
+        _, all_resids = demo_gpt2(test_tokens)
+
+        last_resids_at_position = {}
+
+        for k, resid in enumerate(all_resids):
+            if k == 0:
+                for position in range(resid.shape[1]):
+                    last_resids_at_position[position] = np.zeros(resid.shape[2])
+            for position in range(1, resid.shape[1]):
+                # print('a', np.sum(resid[0, position, :].detach().numpy()))
+                # print('b', np.sum(last_resids_at_position[position]))
+                # print('c', np.sum(resid[0, position, :].detach().numpy() - last_resids_at_position[position]))
+                # print('')
+                resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy() - last_resids_at_position[position], sentence, position))
+                # resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy(), sentence, position))
+                last_resids_at_position[position] = resid[0, position, :].detach().numpy()
+
+        if i % 25 == 0:
+            print(i)
+
+            resids_path = '10_token_resids.p'
+            # resids_path = '10_token_absolute_resids.p'
+            stored_resids = pickle.load(open(resids_path, 'rb')) if file_exists(resids_path) else defaultdict(list)
+            for key in resids_to_add_to_storage:
+                stored_resids[key].extend(resids_to_add_to_storage[key])
+            pickle.dump(stored_resids, open(resids_path, 'wb'))
+
+            resids_to_add_to_storage = defaultdict(list)
+            stored_resids = None
+
+    raise Exception()
+
+
+if False:
+    resids = pickle.load(open('10_token_resids.p', 'rb'))
+    # resids = pickle.load(open('10_token_absolute_resids.p', 'rb'))
+    resids_by_sentence = {}
+
+    for layer in resids:
+        resids_by_sentence[layer] = defaultdict(list)
+
+        for resid, sentence, tup in resids[layer]:
+            resids_by_sentence[layer][sentence].append((resid, tup))
+
+    pickle.dump(resids_by_sentence, open('10_token_resids_by_sentence.p', 'wb'))
+    # pickle.dump(resids_by_sentence, open('10_token_absolute_resids_by_sentence.p', 'wb'))
+
+    raise Exception()
+
+
+if True:
+    from sklearn.decomposition import PCA
+
+    from sklearn.preprocessing import StandardScaler
+
+    absoluteness = True
+
+    absoluteness_str = 'absolute_' if absoluteness else ''
+
+    resids = pickle.load(open(f'10_token_{absoluteness_str}resids.p', 'rb'))
+
+    for i, layer in enumerate(resids):
+        print(f'Layer {layer}')
+        X = np.array([resids[layer][i][0] for i in range(len(resids[layer]))]) 
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+
+        # Perform PCA
+        pca = PCA()
+        X_pca = pca.fit_transform(X_scaled)
+
+        # Get the explained variance ratio
+        explained_variance_ratio = pca.explained_variance_ratio_
+
+        # Print out the explained variance by each component
+        # print("Explained variance by component: ", explained_variance_ratio)
+
+        for j, component in enumerate(pca.components_):
+            pickle.dump(component, open(f'10_token_{absoluteness_str}pca_layer_{i}_component_{j}.p', 'wb'))
+        pickle.dump(X_pca, open(f'10_token_{absoluteness_str}x_pca_layer_{i}.p', 'wb'))
+        pickle.dump(scaler, open(f'10_token_{absoluteness_str}scaler_layer_{i}.p', 'wb'))
+        pickle.dump(explained_variance_ratio, 
+                    open(f'10_token_{absoluteness_str}explained_variance_ratio_layer_{i}.p', 'wb'))
+
+        # for resid, sentence, position in resids[layer][:60]:
+        #     resid_scaled = scaler.transform([resid])
+        #     print(len(pca.components_))
+
+        #     projection = np.dot(pca.components_[0], resid_scaled.T)
+        #     encoded_sentence = enc.encode(sentence)
+
+        #     print(projection)
+        #     print(sentence)
+        #     assert position-1 >= 0
+        #     print(enc.decode([encoded_sentence[position-1]]))
+
+        # print('')
+        # print('')
+
+
+
+    raise Exception()
+
+if False:
     import pickle
     import tiktoken
     sentences = pickle.load(open('two_word_phrase_sentences.p', 'rb'))
@@ -2405,7 +2519,7 @@ if False:
     raise Exception()
 
 
-if False:
+if True:
     import pickle
     from sklearn.decomposition import PCA
     from collections import defaultdict
@@ -2534,7 +2648,7 @@ if False:
         print(w_norm_reshaped)
 
         pickle.dump(w_norm_reshaped, open(f'w_norm_sentence_completeness_layer_{layer_index}.p', 'wb'))
-
+        pickle.dump(np.mean(all_vectors_np, axis=0), open(f'mean_vector_layer_{layer_index}.p', 'wb'))
 
     raise Exception()
 
@@ -2679,7 +2793,7 @@ if False:
 
 
 
-if True:
+if False:
     import pickle
     from sklearn.decomposition import PCA
     from collections import defaultdict
@@ -2808,6 +2922,8 @@ if True:
         print(w_norm_reshaped)
 
         pickle.dump(w_norm_reshaped, open(f'w_norm_sentence_completeness_layer_{layer_index}.p', 'wb'))
+        pickle.dump(clf, open(f'sentence_completeness_clf_layer_{layer_index}.p', 'wb'))
+
 
 
     raise Exception()
