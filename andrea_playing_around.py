@@ -18,7 +18,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-import IPython
 import tiktoken
 import matplotlib.pyplot as plt
 import tqdm.auto as tqdm

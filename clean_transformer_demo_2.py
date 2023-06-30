@@ -319,7 +319,10 @@ class Attention(nn.Module):
         self.W_V = nn.Parameter(torch.empty((cfg.n_heads, cfg.d_model, cfg.d_head)))
         nn.init.normal_(self.W_V, std=self.cfg.init_range)
         self.b_V = nn.Parameter(torch.zeros((cfg.n_heads, cfg.d_head)))
-        
+
+
+        # print(f'Num heads is {cfg.n_heads}')
+
         self.W_O = nn.Parameter(torch.empty((cfg.n_heads, cfg.d_head, cfg.d_model)))
         nn.init.normal_(self.W_O, std=self.cfg.init_range)
         self.b_O = nn.Parameter(torch.zeros((cfg.d_model)))
@@ -344,7 +347,7 @@ class Attention(nn.Module):
         z = einsum("batch n_heads query_pos key_pos, batch key_pos n_heads d_head -> batch query_pos n_heads d_head", pattern, v)
 
         attn_out = einsum("batch query_pos n_heads d_head, n_heads d_head d_model -> batch query_pos d_model", z, self.W_O) + self.b_O
-        return attn_out
+        return attn_out, v
 
     def apply_causal_mask(self, attn_scores):
         # attn_scores: [batch, n_heads, query_pos, key_pos]
@@ -378,7 +381,7 @@ class MLP(nn.Module):
 # load_gpt2_test(MLP, reference_gpt2.blocks[0].mlp, cache["blocks.0.ln2.hook_normalized"])
 
 class TransformerBlock(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, i):
         super().__init__()
         self.cfg = cfg
 
@@ -390,13 +393,13 @@ class TransformerBlock(nn.Module):
     def forward(self, resid_pre):
         # resid_pre [batch, position, d_model]
         normalized_resid_pre = self.ln1(resid_pre)
-        attn_out = self.attn(normalized_resid_pre)
+        attn_out, v = self.attn(normalized_resid_pre)
         resid_mid = resid_pre + attn_out
         
         normalized_resid_mid = self.ln2(resid_mid)
         mlp_out = self.mlp(normalized_resid_mid)
         resid_post = resid_mid + mlp_out
-        return resid_post
+        return resid_post, v
 # rand_float_test(TransformerBlock, [2, 4, 768])
 # load_gpt2_test(TransformerBlock, reference_gpt2.blocks[0], cache["resid_pre", 0])
 
@@ -423,16 +426,17 @@ class DemoTransformer(nn.Module):
         self.cfg = cfg
         self.embed = Embed(cfg)
         self.pos_embed = PosEmbed(cfg)
-        self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.n_layers)])
+        self.blocks = nn.ModuleList([TransformerBlock(cfg, i) for i in range(cfg.n_layers)])
         self.ln_final = LayerNorm(cfg)
         self.unembed = Unembed(cfg)
     
     def forward(self, tokens, display=False, save_with_prefix=None, load=False, load_with_mod_vector=None, 
                 intervene_in_resid_at_layer=None, resid_intervention_filename=None, extra_value=None,
-                intervene_as_fraction_of_resid=None):
+                intervene_as_fraction_of_resid=None, also_return_vs=False):
         # tokens [batch, position]
 
         all_resids = []
+        all_vs = []
 
         if load:
             residual = pickle.load(open('resid.p', 'rb'))
@@ -470,7 +474,7 @@ class DemoTransformer(nn.Module):
 
         # print(residual.shape)
         for i, block in enumerate(self.blocks):
-            residual = block(residual)
+            residual, v = block(residual)
             if i == intervene_in_resid_at_layer and resid_intervention_filename:
                 residual_intervention = pickle.load(open(resid_intervention_filename, 'rb'))
                 # print('intervening!')
@@ -483,6 +487,7 @@ class DemoTransformer(nn.Module):
                 
                 residual = (residual + torch.from_numpy(residual_intervention) * resid_intervention_factor).float()
             all_resids.append(residual)
+            all_vs.append(v)
             if save_with_prefix:
                 pickle.dump(residual, open(f'resid_{save_with_prefix}_{i}.p', 'wb'))
             # print(residual)
@@ -500,6 +505,8 @@ class DemoTransformer(nn.Module):
         logits = self.unembed(normalized_resid_final)
         # print(logits)
         # logits have shape [batch, position, logits]
+        if also_return_vs:
+            return logits, all_resids, all_vs
         return logits, all_resids
 
 # rand_int_test(DemoTransformer, [2, 4])
@@ -526,6 +533,8 @@ print(cuda(demo_gpt2))
 # print("Loss as average prob", (-loss).exp())
 # print("Loss as 'uniform over this many variables'", (loss).exp())
 # print("Uniform loss over the vocab", math.log(demo_gpt2.cfg.d_vocab))
+
+
 
 if False:
     import pickle
@@ -667,6 +676,1091 @@ def file_exists(filepath):
 
 
 if False:
+    from datasets import load_dataset
+    ds = load_dataset('stas/openwebtext-10k')
+
+    sentences = []
+
+    for i in range(1000):
+        print(i)
+        encoded_text = enc.encode(ds['train'][i]['text'])
+        sentences.append(enc.decode(encoded_text[:100]))
+
+        # print(sentences)
+
+    pickle.dump(sentences, open('openwebtext_100_token_sentences.p', 'wb'))
+
+
+
+if False:
+
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    component_index = 9
+    # component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+    component = pickle.load(open('average_multi_token_direction.p', 'rb'))
+
+
+    def has_only_alphabetic_characters(s):
+        for c in s:
+            if c not in string.ascii_letters:
+                return False
+        return True
+
+    family_related_words = [
+        "mother",
+        "father",
+        "sister",
+        "brother",
+        "uncle",
+        "aunt",
+        "grandfather",
+        "grandmother",
+        "cousin",
+        "niece",
+        "nephew",
+        "daughter",
+        "son",
+        "wife",
+        "husband",
+        "girlfriend",
+        "boyfriend",
+        "fiancé",
+        "fiancée",
+        "mom",
+        "dad",
+        "family",
+        "families",
+        "mommy",
+        "daddy",
+        "sibling",
+        "child",
+        "children",
+        "parent",
+        "mum",
+        "spouse",
+    ]
+
+    three_letter_words = ["the", "and", "to", "of", "a", "in", "is", "it", "I", "that", "be", "he", "we", "me", "for", "my", "on", "do", "no", "an", "as", "or", "by", "so", "at", "all", "if", "are", "up", "you", "has"]
+
+    all_dot_products = []
+    multi_token_dot_products = []
+    family_dot_products = []
+
+    total_multi_token_direction = np.zeros(768)
+    total_family_direction = np.zeros(768)
+    total_direction = np.zeros(768)
+    total_littleword_direction = np.zeros(768)
+
+    littleword_dot_products = []
+
+
+    # for i, sentence in enumerate(pickle.load(open('openwebtext_100_token_sentences.p', 'rb'))[:300]):
+    for i, sentence in enumerate(pickle.load(open('10_token_sentences.p', 'rb'))[:100]):
+
+        print(i)
+
+        encoded_sentence = enc.encode(sentence)
+        for j, token in enumerate(encoded_sentence):
+
+            subsentence_to_run_on = enc.decode(encoded_sentence[:j+1])
+
+            test_tokens = cuda(reference_gpt2.to_tokens(subsentence_to_run_on))
+            # print(reference_gpt2.to_str_tokens(test_tokens))
+
+            demo_logits, resids = demo_gpt2(test_tokens)
+
+            # Get the logits for the last predicted token
+            last_logits = demo_logits[-1, -1]
+            # Apply softmax to convert the logits to probabilities
+            probabilities = torch.nn.functional.softmax(last_logits, dim=0).detach().numpy()
+
+            # Get the most probable next token and append it to the test string
+            most_probable_next_token = enc.decode([last_logits.argmax()])
+            last_token = enc.decode([token])
+            last_token_is_alphabetic = has_only_alphabetic_characters(last_token[1:]) and (len(last_token) > 1 or last_token[0] in string.ascii_letters)
+
+            resid = resids[layer][0,-1,:].detach().numpy()
+
+            total_direction += resid
+            
+            last_token_is_littleword = False
+            for word in three_letter_words:
+                if f' {word}' == last_token.lower():
+                    last_token_is_littleword = True
+
+            dot_product = np.dot(resids[layer][0,-1,:].detach().numpy(), component)
+            all_dot_products.append((dot_product, subsentence_to_run_on))
+
+            if most_probable_next_token[0] in string.ascii_letters and last_token_is_alphabetic and len(encoded_sentence) > 0:
+                multi_token_dot_products.append((dot_product, subsentence_to_run_on))
+                total_multi_token_direction += resid
+
+            last_token_is_familial = False
+            for word in family_related_words:
+                if f' {word}' == last_token.lower() or f' {word}s' == last_token.lower():
+                    last_token_is_familial = True  
+            
+            if last_token_is_littleword:
+                littleword_dot_products.append((dot_product, subsentence_to_run_on))
+                total_littleword_direction += resid
+
+            if last_token_is_familial:
+                family_dot_products.append((dot_product, subsentence_to_run_on))
+                total_family_direction += resid
+
+                if dot_product > -10:
+                    print(f'Not family: {last_token}')
+                else:
+                    print(f'family: {last_token}')
+
+        # probabilities = torch.nn.functional.softmax(last_logits, dim=0).detach().numpy()
+        # doctored_probabilities = torch.nn.functional.softmax(doctored_last_logits, dim=0).detach().numpy()
+
+
+        # # Get the indices of the top 10 probabilities
+        # topk_indices = np.argpartition(probabilities, -10)[-10:]
+        # # Get the top 10 probabilities
+        # topk_probabilities = probabilities[topk_indices]
+        # # Get the top 10 tokens
+        # topk_tokens = [reference_gpt2.tokenizer.decode(i) for i in topk_indices]
+
+        # # Print the top 10 tokens and their probabilities
+        # # for token, probability in zip(topk_tokens, topk_probabilities):
+        # #     print(f"Token: {token}, Probability: {probability}")
+
+        # # Get the most probable next token and append it to the test string
+        # most_probable_next_token = reference_gpt2.tokenizer.decode(last_logits.argmax())
+
+
+    pickle.dump(all_dot_products, open('all_dot_products_with_average_multitoken.p', 'wb'))
+    pickle.dump(multi_token_dot_products, open('multi_token_dot_products_with_average_multitoken.p', 'wb'))
+    pickle.dump(family_dot_products, open('family_dot_products_with_average_multitoken.p', 'wb'))
+    pickle.dump(littleword_dot_products, open('littleword_dot_products_with_average_multitoken.p', 'wb'))
+    # pickle.dump(total_direction, open('owt_total_direction.p', 'wb'))
+    # pickle.dump(total_multi_token_direction, open('owt_total_multi_token_direction.p', 'wb'))
+    # pickle.dump(total_family_direction, open('owt_total_family_direction.p', 'wb'))
+    pickle.dump(total_littleword_direction, open('total_littleword_direction.p', 'wb'))
+
+
+    raise Exception()
+
+
+if False:
+
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    component_index = 9
+    component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+
+    def has_only_alphabetic_characters(s):
+        for c in s:
+            if c not in string.ascii_letters:
+                return False
+        return True
+
+    family_related_words = [
+        "mother",
+        "father",
+        "sister",
+        "brother",
+        "uncle",
+        "aunt",
+        "grandfather",
+        "grandmother",
+        "cousin",
+        "niece",
+        "nephew",
+        "daughter",
+        "son",
+        "wife",
+        "husband",
+        "girlfriend",
+        "boyfriend",
+        "fiancé",
+        "fiancée",
+        "mom",
+        "dad",
+        "family",
+        "families",
+        "mommy",
+        "daddy",
+        "sibling",
+        "child",
+        "children",
+        "parent",
+        "mum",
+        "spouse",
+        "relatives",
+    ]
+
+    all_dot_products = []
+    multi_token_dot_products = []
+    family_dot_products = []
+
+    total_multi_token_direction = np.zeros(768)
+    total_family_direction = np.zeros(768)
+    total_direction = np.zeros(768)
+
+    multi_token_contributors = defaultdict(list)
+    family_contributors = defaultdict(list)
+
+
+    for i, sentence in enumerate(pickle.load(open('openwebtext_100_token_sentences.p', 'rb'))[:300]):
+    # for i, sentence in enumerate(pickle.load(open('10_token_sentences.p', 'rb'))[:1000]):
+
+        print(i)
+
+        encoded_sentence = enc.encode(sentence)
+        for j, token in enumerate(encoded_sentence):
+
+            subsentence_to_run_on = enc.decode(encoded_sentence[:j+1])
+
+            test_tokens = cuda(reference_gpt2.to_tokens(subsentence_to_run_on))
+            # print(reference_gpt2.to_str_tokens(test_tokens))
+
+            demo_logits, resids = demo_gpt2(test_tokens)
+            # print(cache.get_full_resid_decomp)
+            # print(cache.get_full_resid_decomposition())
+
+            # Get the logits for the last predicted token
+            last_logits = demo_logits[-1, -1]
+            # Apply softmax to convert the logits to probabilities
+            probabilities = torch.nn.functional.softmax(last_logits, dim=0).detach().numpy()
+
+            # Get the most probable next token and append it to the test string
+            most_probable_next_token = enc.decode([last_logits.argmax()])
+            last_token = enc.decode([token])
+            last_token_is_alphabetic = has_only_alphabetic_characters(last_token[1:]) and (len(last_token) > 1 or last_token[0] in string.ascii_letters)
+
+            resid = resids[layer][0,-1,:].detach().numpy()
+
+            total_direction += resid
+
+            dot_product = np.dot(resids[layer][0,-1,:].detach().numpy(), component)
+            all_dot_products.append((dot_product, subsentence_to_run_on))
+
+            if most_probable_next_token[0] in string.ascii_letters and last_token_is_alphabetic and len(encoded_sentence) > 0:
+                multi_token_dot_products.append((dot_product, subsentence_to_run_on))
+                # print(test_tokens)
+
+                demo_logits, cache = reference_gpt2.run_with_cache(test_tokens)
+
+                s1, s2 = cache.get_full_resid_decomposition(layer=3, return_labels=True, pos_slice=-1)
+
+                for k, label in enumerate(s2):
+                    vec = s1[k,0,:]
+                    dp = np.dot(vec.detach().numpy(), component)
+                    multi_token_contributors[label].append(dp)
+
+
+                # print(len(s1))
+                # print(s1.shape)
+                # print(s2)
+
+
+
+                # print(dir(cache.get_full_resid_decomposition()))
+                # print(cache.get_full_resid_decomposition().shape)
+                # print(cache['blocks.2.hook_resid_post'].get_full_resid_decomposition())
+                # print(cache['blocks.2.hook_resid_post'].get_full_resid_decomposition().shape)
+                # raise Exception()
+
+                total_multi_token_direction += resid
+
+            last_token_is_familial = False
+            for word in family_related_words:
+                if f' {word}' == last_token.lower() or f' {word}s' == last_token.lower():
+                    last_token_is_familial = True  
+            
+            if last_token_is_familial:
+                family_dot_products.append((dot_product, subsentence_to_run_on))
+                total_family_direction += resid
+
+                if dot_product > -10:
+                    print(f'Not family: {last_token}')
+                else:
+                    print(f'family: {last_token}')
+
+                demo_logits, cache = reference_gpt2.run_with_cache(test_tokens)
+
+                s1, s2 = cache.get_full_resid_decomposition(layer=3, return_labels=True, pos_slice=-1)
+
+                for k, label in enumerate(s2):
+                    vec = s1[k,0,:]
+                    dp = np.dot(vec.detach().numpy(), component)
+                    family_contributors[label].append(dp)
+
+        # probabilities = torch.nn.functional.softmax(last_logits, dim=0).detach().numpy()
+        # doctored_probabilities = torch.nn.functional.softmax(doctored_last_logits, dim=0).detach().numpy()
+
+
+        # # Get the indices of the top 10 probabilities
+        # topk_indices = np.argpartition(probabilities, -10)[-10:]
+        # # Get the top 10 probabilities
+        # topk_probabilities = probabilities[topk_indices]
+        # # Get the top 10 tokens
+        # topk_tokens = [reference_gpt2.tokenizer.decode(i) for i in topk_indices]
+
+        # # Print the top 10 tokens and their probabilities
+        # # for token, probability in zip(topk_tokens, topk_probabilities):
+        # #     print(f"Token: {token}, Probability: {probability}")
+
+        # # Get the most probable next token and append it to the test string
+        # most_probable_next_token = reference_gpt2.tokenizer.decode(last_logits.argmax())
+
+    pickle.dump(multi_token_contributors, open('multi_token_contributors.p', 'wb'))
+    pickle.dump(family_contributors, open('family_contributors.p', 'wb'))
+
+
+    # pickle.dump(all_dot_products, open('owt_all_dot_products.p', 'wb'))
+    # pickle.dump(multi_token_dot_products, open('owt_multi_token_dot_products.p', 'wb'))
+    # pickle.dump(family_dot_products, open('owt_family_dot_products.p', 'wb'))
+    # pickle.dump(total_direction, open('owt_total_direction.p', 'wb'))
+    # pickle.dump(total_multi_token_direction, open('owt_total_multi_token_direction.p', 'wb'))
+    # pickle.dump(total_family_direction, open('owt_total_family_direction.p', 'wb'))
+
+    raise Exception()
+
+
+
+if False:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Assume the lists are named list1, list2, list3
+    # list1 = np.random.normal(0, 1, 1000)
+    # list2 = np.random.normal(0, 2, 1000)
+    # list3 = np.random.normal(0, 3, 1000)
+
+    # Define the number of bins
+    num_bins = 50
+
+    all_dot_products = pickle.load(open('all_dot_products_with_average_multitoken.p', 'rb'))
+    print(all_dot_products)
+    # Plot the histogram for list1
+    plt.hist([x[0] for x in all_dot_products], num_bins, alpha=0.5, density=True, label=f'All residual streams ({len(all_dot_products)} examples)', color='blue')
+
+    # Plot the histogram for list2
+    multi_token_dot_products = pickle.load(open('multi_token_dot_products_with_average_multitoken.p', 'rb'))
+    plt.hist([x[0] for x in multi_token_dot_products], num_bins, alpha=0.5, density=True, label=f'Predicted multi-token residual streams ({len(multi_token_dot_products)} examples)', color='green')
+
+    # Plot the histogram for list3
+    # family_dot_products = pickle.load(open('family_dot_products_with_average_multitoken.p', 'rb'))
+    # plt.hist([x[0] for x in family_dot_products], 10, density=True, alpha=0.5, label=f'Family residual streams ({len(family_dot_products)} examples)', color='red')
+
+    littleword_dot_products = pickle.load(open('littleword_dot_products_with_average_multitoken.p', 'rb'))
+    plt.hist([x[0] for x in littleword_dot_products], 10, density=True, alpha=0.5, label=f'Little word residual streams ({len(littleword_dot_products)} examples)', color='red')
+
+
+    # Add the legend
+    plt.legend(loc='upper right')
+
+    # Show the plot
+    plt.show()    
+    raise Exception()
+
+
+if False:
+    # all_dot_products = pickle.load(open('owt_all_dot_products.p', 'rb'))
+    # multi_token_dot_products = pickle.load(open('owt_multi_token_dot_products.p', 'rb'))
+    # family_dot_products = pickle.load(open('owt_family_dot_products.p', 'rb'))
+
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    component_index = 9
+    component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+
+
+    top_20_multi_token_neurons = []
+    bottom_20_multi_token_neurons = []
+    top_20_family_neurons = []
+    bottom_20_family_neurons = []
+
+    multi_token_contributors = pickle.load(open('multi_token_contributors.p', 'rb'))
+    family_contributors = pickle.load(open('family_contributors.p', 'rb'))
+
+    for multi_token_label in multi_token_contributors:
+        dot_products = multi_token_contributors[multi_token_label]
+        average_dot_product = sum(dot_products) / len(dot_products)
+
+        if len(top_20_multi_token_neurons)==0 or average_dot_product > min([t[0] for t in top_20_multi_token_neurons]):
+            if len(top_20_multi_token_neurons) < 20:
+                top_20_multi_token_neurons.append((average_dot_product, multi_token_label))
+            else:
+                top_20_multi_token_neurons[0] = (average_dot_product, multi_token_label)
+
+        if len(bottom_20_multi_token_neurons)==0 or average_dot_product < max([t[0] for t in bottom_20_multi_token_neurons]):
+            if len(bottom_20_multi_token_neurons) < 20:
+                bottom_20_multi_token_neurons.append((average_dot_product, multi_token_label))
+            else:
+                bottom_20_multi_token_neurons[0] = (average_dot_product, multi_token_label)        
+
+        top_20_multi_token_neurons = sorted(top_20_multi_token_neurons, key=lambda t: t[0])
+        bottom_20_multi_token_neurons = sorted(bottom_20_multi_token_neurons, key=lambda t: -t[0])
+
+    for family_label in family_contributors:
+        dot_products = family_contributors[family_label]
+        average_dot_product = sum(dot_products) / len(dot_products)
+
+        if len(top_20_family_neurons)==0 or average_dot_product > min([t[0] for t in top_20_family_neurons]):
+            if len(top_20_family_neurons) < 20:
+                top_20_family_neurons.append((average_dot_product, family_label))
+            else:
+                top_20_family_neurons[0] = (average_dot_product, family_label)
+
+        if len(bottom_20_family_neurons)==0 or average_dot_product < max([t[0] for t in bottom_20_family_neurons]):
+            if len(bottom_20_family_neurons) < 20:
+                bottom_20_family_neurons.append((average_dot_product, family_label))
+            else:
+                bottom_20_family_neurons[0] = (average_dot_product, family_label)
+
+        top_20_family_neurons = sorted(top_20_family_neurons, key=lambda t: t[0])
+        bottom_20_family_neurons = sorted(bottom_20_family_neurons, key=lambda t: -t[0])
+
+    print("Largest positive contribution: multi token residual streams")
+    for dp, label in top_20_multi_token_neurons[::-1]:
+        print(label, dp)
+    print('')
+    print("Largest negative contribution: multi token residual streams")
+    for dp, label in bottom_20_multi_token_neurons[::-1]:
+        print(label, dp)
+    print('')
+    print("Largest positive contribution: family residual streams")
+    for dp, label in top_20_family_neurons[::-1]:
+        print(label, dp)
+    print('')
+    print("Largest negative contribution: family residual streams")
+    for dp, label in bottom_20_family_neurons[::-1]:
+        print(label, dp)
+    print('')
+
+
+
+
+    raise Exception()
+
+if False:
+    all_dot_products = pickle.load(open('owt_all_dot_products.p', 'rb'))
+    multi_token_dot_products = pickle.load(open('owt_multi_token_dot_products.p', 'rb'))
+    family_dot_products = pickle.load(open('owt_family_dot_products.p', 'rb'))
+
+    multi_token_sentences = set([t[1] for t in multi_token_dot_products])
+    family_dot_product_sentences = set([t[1] for t in family_dot_products])
+
+    top_10_sentences = [(-10000, None)]
+    bottom_10_sentences = [(10000, None)]
+
+    for dp, sentence in all_dot_products:
+        if sentence not in multi_token_sentences and sentence not in family_dot_product_sentences:
+            if dp > min([t[0] for t in top_10_sentences]):
+                if len(top_10_sentences) < 10:
+                    top_10_sentences.append((dp, sentence))
+                else:
+                    top_10_sentences[0] = (dp, sentence)
+
+                print(f'Top: {dp}')
+            
+            if dp < max([t[0] for t in bottom_10_sentences]):
+                if len(bottom_10_sentences) < 10:
+                    bottom_10_sentences.append((dp, sentence))
+                else:
+                    bottom_10_sentences[0] = (dp, sentence)
+                print(f'Bottom: {dp}')
+
+            top_10_sentences = sorted(top_10_sentences, key=lambda t: t[0])
+            bottom_10_sentences = sorted(bottom_10_sentences, key=lambda t: -t[0])
+
+            # print(bottom_10_sentences)
+
+        # print(dp)
+
+    for tup in top_10_sentences:
+        print(enc.decode([enc.encode(tup[1])[-1]]))
+    for tup in bottom_10_sentences:
+        print(enc.decode([enc.encode(tup[1])[-1]]))
+
+    raise Exception()
+
+
+if False:
+    import numpy as np
+    from math import acos
+
+    def random_unit_vector(d):
+        """Generates a random unit vector with d dimensions."""
+        vector = np.random.randn(d)
+        unit_vector = vector / np.linalg.norm(vector)
+        return unit_vector
+
+    def adjust_vectors(n, d, epsilon=0.001, max_iters=10000):
+        """Adjusts vectors by adding a small amount to make them nearly orthogonal."""
+        vectors = [random_unit_vector(d) for _ in range(n)]
+        for _ in range(max_iters):
+            # Adjust each vector
+            for i in range(n):
+                for j in range(n):
+                    if i != j:
+                        dot = np.dot(vectors[i], vectors[j])
+                        vectors[i] -= epsilon * dot/(1 - dot*dot) * (vectors[j] - vectors[i])
+                        vectors[i] /= np.linalg.norm(vectors[i])  # normalize it back to a unit vector
+            # Check if maximum absolute dot product is less than 0.01
+            max_dot = max(abs(np.dot(vectors[i], vectors[j])) for i in range(n) for j in range(i))
+            # print(max_dot)
+
+            # print(vectors)
+
+        return vectors, max_dot
+    
+
+    for d in range(2,10):
+        print(adjust_vectors(2*d, d)[1])
+
+    raise Exception()
+
+
+if False:
+    def angle_between(v1, v2):
+        # Normalizing vectors (making their length 1)
+        
+        v1_u = v1 / np.linalg.norm(v1)
+        v2_u = v2 / np.linalg.norm(v2)
+        
+        # Finding the cosine of the angle between the vectors
+        cos_theta = np.dot(v1_u, v2_u)
+        
+        # Ensuring the value lies in the appropriate interval for arccos
+        cos_theta = np.clip(cos_theta, -1, 1)
+        
+        # Returning the angle in radians
+        return np.arccos(cos_theta)
+
+    multi_token_dot_products = pickle.load(open('multi_token_dot_products_with_average_multitoken.p', 'rb'))
+    littleword_dot_products = pickle.load(open('littleword_dot_products_with_average_multitoken.p', 'rb'))
+    all_dot_products = pickle.load(open('all_dot_products_with_average_multitoken.p', 'rb'))
+
+    average_multi_token_direction = pickle.load(open('total_multi_token_direction.p', 'rb')) / len(multi_token_dot_products)
+    average_littleword_direction = pickle.load(open('total_family_direction.p', 'rb')) / len(littleword_dot_products)
+    average_direction = pickle.load(open('total_direction.p', 'rb')) / len(all_dot_products)
+
+    print(angle_between(average_multi_token_direction - average_direction, average_littleword_direction - average_direction))
+
+if False:
+
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    angles_between = []
+    for component_index in range(768):
+        component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+
+
+        import numpy as np
+
+        def angle_between(v1, v2):
+            # Normalizing vectors (making their length 1)
+            
+            v1_u = v1 / np.linalg.norm(v1)
+            v2_u = v2 / np.linalg.norm(v2)
+            
+            # Finding the cosine of the angle between the vectors
+            cos_theta = np.dot(v1_u, v2_u)
+            
+            # Ensuring the value lies in the appropriate interval for arccos
+            cos_theta = np.clip(cos_theta, -1, 1)
+            
+            # Returning the angle in radians
+            return np.arccos(cos_theta)
+
+        all_dot_products = pickle.load(open('all_dot_products.p', 'rb'))
+        multi_token_dot_products = pickle.load(open('multi_token_dot_products.p', 'rb'))
+        family_dot_products = pickle.load(open('family_dot_products.p', 'rb'))
+
+        # Example usage:
+        # v1 = np.array([1, 0])
+        average_multi_token_direction = pickle.load(open('total_multi_token_direction.p', 'rb')) / len(multi_token_dot_products)
+        average_family_direction = pickle.load(open('total_family_direction.p', 'rb')) / len(family_dot_products)
+        average_direction = pickle.load(open('total_direction.p', 'rb')) / len(all_dot_products)
+
+        # plt.plot(average_multi_token_direction, label='avg multi token direction')
+        # plt.plot(average_family_direction, label='avg family direction')
+        # plt.plot(average_direction, label='avg overall direction')
+        # plt.legend()
+        # plt.show()
+
+        # plt.plot(np.multiply(np.clip(average_multi_token_direction - average_direction, -1, 1), 
+        #                      np.clip(average_family_direction - average_direction, -1, 1)))
+        # plt.show()
+
+        # print(angle_between(multi_token, family))
+        # print(angle_between(multi_token, overall))
+        # print(angle_between(family, overall))
+
+        # average_multi_token_direction = multi_token
+
+        angles_between.append(angle_between(
+            average_multi_token_direction - average_family_direction, 
+            # average_family_direction - average_multi_token_direction, 
+            component,
+        ))
+
+    pickle.dump(average_multi_token_direction - average_family_direction, open('average_multi_token_minus_family.p', 'wb'))
+
+    pickle.dump(average_family_direction - average_direction, open('average_family_direction.p', 'wb'))
+    pickle.dump(average_multi_token_direction - average_direction, open('average_multi_token_direction.p', 'wb'))
+
+    from math import pi
+    plt.plot([angle*360/(2*pi) for angle in angles_between])
+    plt.axhline(90)
+    plt.xlabel('PCA direction')
+    plt.ylabel('Angle (in degrees)')
+    plt.title('Angle of (multi-token - family) from PCA direction')
+    plt.show()
+
+    raise Exception()
+
+    # pickle.dump(total_direction, open('total_direction.p', 'wb'))
+    # pickle.dump(total_multi_token_direction, open('total_multi_token_direction.p', 'wb'))
+    # pickle.dump(total_family_direction, open('total_family_direction.p', 'wb'))
+
+
+if False:
+
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    angles_between = []
+    for component_index in range(768):
+        component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+
+
+        import numpy as np
+
+        # def angle_between_vector_and_plane(v1, v2, v3):
+        #     # Form a matrix with v2 and v3
+        #     plane_matrix = np.column_stack((v2, v3))
+            
+        #     # Calculate the orthogonal projection of v1 onto the plane defined by v2 and v3
+        #     projection = plane_matrix @ np.linalg.inv(plane_matrix.T @ plane_matrix) @ plane_matrix.T @ v1
+            
+        #     # The difference between v1 and its projection is a vector that's perpendicular to the plane
+        #     perpendicular_vector = v1 - projection
+            
+        #     # Now we calculate the angle between v1 and this perpendicular vector
+        #     cos_angle = np.dot(v1, perpendicular_vector) / (np.linalg.norm(v1) * np.linalg.norm(perpendicular_vector))
+            
+        #     # Handle potential floating point errors that could make cos_angle slightly above 1 or below -1
+        #     cos_angle = np.clip(cos_angle, -1, 1)
+            
+        #     # Return the angle in degrees
+        #     return np.arccos(cos_angle) * (180 / np.pi)
+
+        # def angle_between_vector_and_plane(v1, v2, v3):
+        #     # Function to calculate the dot product
+        #     def dot_product(v, w):
+        #         return sum(v_i*w_i for v_i, w_i in zip(v, w))
+
+        #     # Function to calculate the magnitude
+        #     def magnitude(v):
+        #         return np.sqrt(dot_product(v, v))
+
+        #     # Function to project v1 onto v2
+        #     def project(v, w):
+        #         projection_length = dot_product(v, w) / magnitude(w)
+        #         return [i*projection_length for i in w]
+
+        #     # Calculate the normal vector to the plane
+        #     n = np.subtract(v1, project(v1, v2))
+
+        #     # Calculate the angle
+        #     cos_theta = abs(dot_product(v1, n)) / (magnitude(v1) * magnitude(n))
+        #     theta = np.arccos(np.clip(cos_theta, -1, 1))  # clip is used to limit the values between -1 and 1 to avoid computational errors
+
+        #     return np.degrees(theta)  # convert radian to degree        
+
+        # def angle_between_vector_and_plane(v1, v2, v3):
+        #     # Function to calculate the dot product
+        #     def dot_product(v, w):
+        #         return np.dot(v, w)
+
+        #     # Function to calculate the magnitude
+        #     def magnitude(v):
+        #         return np.sqrt(dot_product(v, v))
+
+        #     # Function to subtract projection of v onto w from v
+        #     def subtract_projection(v, w):
+        #         return v - ((dot_product(v, w) / dot_product(w, w)) * w)
+
+        #     # Find a vector orthogonal to the plane spanned by v2 and v3
+        #     orthogonal_to_plane = subtract_projection(v3, v2)
+
+        #     # Find the component of v1 orthogonal to the plane
+        #     v1_orthogonal_to_plane = subtract_projection(v1, orthogonal_to_plane)
+
+        #     # Calculate the angle
+        #     cos_theta = abs(dot_product(v1, v1_orthogonal_to_plane)) / (magnitude(v1) * magnitude(v1_orthogonal_to_plane))
+        #     theta = np.arccos(np.clip(cos_theta, -1, 1))  # clip is used to limit the values between -1 and 1 to avoid computational errors
+
+        #     return np.degrees(theta)  # convert radian to degree        
+
+        def normal_vector(v1, v2):
+            # Ensure input vectors are numpy arrays
+            v1 = np.array(v1)
+            v2 = np.array(v2)
+
+            # Create the matrix
+            matrix = np.vstack([v1, v2, np.ones_like(v1)])
+
+            # Calculate the determinant
+            normal = np.linalg.det(matrix)
+
+            return normal
+
+        all_dot_products = pickle.load(open('all_dot_products.p', 'rb'))
+        multi_token_dot_products = pickle.load(open('multi_token_dot_products.p', 'rb'))
+        family_dot_products = pickle.load(open('family_dot_products.p', 'rb'))
+
+        # Example usage:
+        # v1 = np.array([1, 0])
+        average_multi_token_direction = pickle.load(open('total_multi_token_direction.p', 'rb')) / len(multi_token_dot_products)
+        average_family_direction = pickle.load(open('total_family_direction.p', 'rb')) / len(family_dot_products)
+        average_direction = pickle.load(open('total_direction.p', 'rb')) / len(all_dot_products)
+
+        # plt.plot(average_multi_token_direction, label='avg multi token direction')
+        # plt.plot(average_family_direction, label='avg family direction')
+        # plt.plot(average_direction, label='avg overall direction')
+        # plt.legend()
+        # plt.show()
+
+        # plt.plot(np.multiply(np.clip(average_multi_token_direction - average_direction, -1, 1), 
+        #                      np.clip(average_family_direction - average_direction, -1, 1)))
+        # plt.show()
+
+        # print(angle_between(multi_token, family))
+        # print(angle_between(multi_token, overall))
+        # print(angle_between(family, overall))
+
+        # average_multi_token_direction = multi_token
+
+        print(normal_vector(average_multi_token_direction, average_family_direction))
+        # angles_between.append(angle_between_vector_and_plane(
+        #     component,
+        #     average_multi_token_direction, 
+        #     average_family_direction
+        # ))
+
+    from math import pi
+    plt.plot(angles_between)
+    plt.axhline(90)
+    plt.xlabel('PCA direction')
+    plt.ylabel('Angle (in degrees)')
+    plt.title('Angle of PCA direction from plane spanned by multi-token + family')
+    plt.show()
+
+    raise Exception()
+
+
+
+
+if False:
+    diffs_on = False
+
+    absoluteness_str = '' if diffs_on else 'absolute_'
+    layer = 3
+    component_index = 9
+    component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
+
+    embedding_matrix = demo_gpt2.embed.W_E.detach().numpy()
+
+    import heapq
+
+    top_100 = []
+    bottom_100 = []
+
+    for i, row in enumerate(embedding_matrix):
+        dot_product = np.dot(component, embedding_matrix[i])
+
+        # For top 100
+        if len(top_100) < 100:
+            heapq.heappush(top_100, (dot_product, i))
+        else:
+            heapq.heappushpop(top_100, (dot_product, i))
+
+        # For bottom 100
+        # We use -dot_product to convert the min-heap to a max-heap
+        if len(bottom_100) < 100:
+            heapq.heappush(bottom_100, (-dot_product, i))
+        else:
+            heapq.heappushpop(bottom_100, (-dot_product, i))
+
+    # Convert bottom_100 back to positive and reverse the list to have highest values first
+    bottom_100 = [(-value, i) for value, i in bottom_100]
+    bottom_100 = sorted(bottom_100, reverse=True)
+
+    # Sort top_100 to have highest values first
+    top_100 = sorted(top_100, reverse=True)
+
+    print([enc.decode([tup[1]]) for tup in bottom_100])
+    print([enc.decode([tup[1]]) for tup in top_100])
+
+
+    raise Exception()
+
+
+if False:
+    for i, block in enumerate(demo_gpt2.blocks):
+        print(i)
+        for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            col = j
+            W_OV = np.dot(np.transpose(block.attn.W_O.detach().numpy()[j]), np.transpose(block.attn.W_V.detach().numpy()[j]))
+            W_VO = np.dot(block.attn.W_V.detach().numpy()[j], block.attn.W_O.detach().numpy()[j])
+            print(W_OV.shape)
+
+            # Calculate the eigenvalues and eigenvectors
+            eigenvalues, eigenvectors = np.linalg.eig(W_OV)
+            eigenvalues, eigenvectors = np.linalg.eig(W_VO)
+            
+            # Sort the eigenvectors in descending order of the absolute value of their corresponding eigenvalues
+            idx = np.abs(eigenvalues).argsort()[::-1]
+            eigenvalues = eigenvalues[idx]
+            eigenvectors = eigenvectors[:,idx]
+            
+            # Save the sorted eigenvectors into pickle files
+            with open(f'eigenvectors_wvo_block_{i}_col_{j}.p', 'wb') as f:
+                pickle.dump((eigenvalues, eigenvectors), f)
+
+    raise Exception()
+
+if False:
+    for i, block in enumerate(demo_gpt2.blocks):
+        for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            print(i,j)
+            col = j
+            W_VO = np.dot(block.attn.W_V.detach().numpy()[j], block.attn.W_O.detach().numpy()[j])
+            
+            # Calculate the SVD
+            U, singular_values, Vh = np.linalg.svd(W_VO)
+            
+            # The right singular vectors are rows of Vh, and they are returned sorted by the singular_values
+            
+            # Save the right singular vectors and singular values into pickle files
+            with open(f'singular_vectors_block_{i}_col_{j}.p', 'wb') as f:
+                pickle.dump((U, singular_values, Vh), f)
+                
+            # with open(f'singular_values_block_{i}_col_{j}.pkl', 'wb') as f:
+            #     pickle.dump(singular_values, f)
+
+    raise Exception()
+    
+# if True:
+#     import numpy as np
+#     from scipy.linalg import svd
+
+#     def gram_schmidt(A):
+#         """
+#         Perform Gram-Schmidt orthogonalization on the columns of A
+#         """
+#         Q, _ = np.linalg.qr(A)
+#         return Q
+
+#     def principal_angles(A, B):
+#         """
+#         Compute the principal angles between subspaces spanned by A and B
+#         """
+#         # Make sure A and B have orthonormal columns
+#         Q1 = gram_schmidt(A)
+#         Q2 = gram_schmidt(B)
+
+#         # Compute the cross-correlation matrix
+#         C = np.dot(np.transpose(Q1), Q2)
+#         # plt.matshow(C)
+#         # plt.show()
+        
+#         # Singular value decomposition
+#         _, s, _ = svd(C)
+
+#         # print(s)
+        
+#         # Protect against numerical errors that make s > 1
+#         s = np.minimum(s, np.ones_like(s))
+
+#         # The singular values of C are the cosines of the principal angles
+#         # So, we get the angles using an arc-cosine.
+#         angles = np.arccos(s)
+
+#         return angles    
+
+#     # def make_supermatrix(A, B):
+#     #     # Ensure matrices are equally-sized
+#     #     assert A.shape == B.shape, "Matrices must be equally-sized"
+
+#     #     # Create zero matrices of the same size as A and B
+#     #     zeros = np.zeros_like(A)
+
+#     #     # Construct the supermatrix
+#     #     supermatrix = np.block([[A, zeros], [zeros, B]])
+
+#     #     return supermatrix
+
+#     def make_supermatrix(*matrices):
+#         # Ensure all matrices are equally-sized
+#         shapes = [mat.shape for mat in matrices]
+#         assert len(set(shapes)) == 1, "All matrices must be equally-sized"
+
+#         # Create zero matrix of the same size as input matrices
+#         zeros = np.zeros_like(matrices[0])
+
+#         # Construct the supermatrix
+#         supermatrix_blocks = []
+#         for mat in matrices:
+#             supermatrix_blocks.append(np.block([[mat, zeros], [zeros, zeros]]))
+
+#         # Combine all blocks into a supermatrix
+#         supermatrix = np.block(supermatrix_blocks)
+
+#         return supermatrix
+
+#     # for i in range(12):
+#     #     for j in range(12):
+#     #         W_VO1
+#     for i, block in enumerate(demo_gpt2.blocks):
+
+#         # Ws = [np.dot(block.attn.W_V.detach().numpy()[j], block.attn.W_O.detach().numpy()[j]) for j in range(12)]
+#         Ws = [np.dot(demo_gpt2.blocks[j].attn.W_V.detach().numpy()[i], demo_gpt2.blocks[j].attn.W_O.detach().numpy()[i]) for j in range(12)]
+
+#         W_VO1 = np.dot(block.attn.W_V.detach().numpy()[0], block.attn.W_O.detach().numpy()[0])
+#         W_VO2 = np.dot(block.attn.W_V.detach().numpy()[5], block.attn.W_O.detach().numpy()[1])
+
+#         print(sum([i > 0 for i in principal_angles(W_VO1, W_VO2)]))
+#         U2, singular_values2, Vh2 = np.linalg.svd(W_VO2)
+
+#         # plt.matshow(W_VO1)
+#         U1, singular_values1, Vh1 = np.linalg.svd(W_VO1)
+#         print(sum([i > 1e-5 for i in singular_values1]))
+#         print(sum([i > 1e-5 for i in singular_values2]))
+
+#         supermatrix = make_supermatrix(*Ws)
+#         U3, singular_values3, Vh3 = np.linalg.svd(supermatrix)
+#         print([s for s in singular_values3])
+#         print(sum([i > 1e-5 for i in singular_values3]))
+
+
+        # print(singular_values1)
+
+        # # plt.show()
+
+        # # plt.matshow(W_VO2)
+        
+        # print(singular_values2)
+        # # plt.show()
+
+        # plt.matshow(Vh1)
+        # plt.colorbar()
+        # plt.show()
+
+        # plt.matshow(Vh2)
+        # plt.colorbar()
+        # plt.show()
+
+        # raise Exception()
+
+        # for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            # print(principal_angles(W_VO1, W_VO2))
+
+            # # Calculate the SVD
+            # U, singular_values, Vh = np.linalg.svd(W_VO)
+            
+            # # The right singular vectors are rows of Vh, and they are returned sorted by the singular_values
+            
+            # # Save the right singular vectors and singular values into pickle files
+            # with open(f'singular_vectors_block_{i}_col_{j}.p', 'wb') as f:
+            #     pickle.dump((U, singular_values, Vh), f)
+                
+            # with open(f'singular_values_block_{i}_col_{j}.pkl', 'wb') as f:
+            #     pickle.dump(singular_values, f)
+
+
+if False:
+    for i, block in enumerate(demo_gpt2.blocks):
+
+        # Calculate row and column indices for the subplot
+        row = i
+        print(block.attn.W_O.detach().numpy().shape)
+
+        for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            col = j
+            # W_OV = np.dot(np.transpose(block.attn.W_O.detach().numpy()[j]), np.transpose(block.attn.W_V.detach().numpy()[j]))
+            W_V = np.transpose(block.attn.W_V.detach().numpy()[j])
+
+            pickle.dump(W_V, open(f'v_matrix_block_{i}_col_{j}.p', 'wb'))
+
+            # Plot the matrix to the appropriate subplot
+            # cax = axs[row, col].matshow(W_OV)
+            # fig.colorbar(cax, ax=axs[row, col])
+
+
+if False:
+    for i, block in enumerate(demo_gpt2.blocks):
+
+        # Calculate row and column indices for the subplot
+        row = i
+        print(block.attn.W_O.detach().numpy().shape)
+
+        for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            col = j
+            W_OV = np.dot(block.attn.W_O.detach().numpy()[j], block.attn.W_V.detach().numpy()[j])
+            
+
+            # Plot the matrix to the appropriate subplot
+            cax = axs[row, col].matshow(W_OV)
+            fig.colorbar(cax, ax=axs[row, col])    
+
+
+if False:
+    fig, axs = plt.subplots(12, 12, figsize=(20,20))  # Create 12x12 subplots
+    fig.tight_layout(pad=3.0)  # Adjust the spacing between subplots
+
+    # We assume demo_gpt2.blocks is a 144 element list.
+    # assert len(demo_gpt2.blocks) == 144, "The number of blocks must be 144 for a 12x12 grid."
+
+    for i, block in enumerate(demo_gpt2.blocks):
+
+        # Calculate row and column indices for the subplot
+        row = i
+        print(block.attn.W_O.detach().numpy().shape)
+
+        for j in range(block.attn.W_O.detach().numpy().shape[0]):
+            col = j
+            W_OV = np.dot(block.attn.W_O.detach().numpy()[j], block.attn.W_V.detach().numpy()[j])
+            
+
+            # Plot the matrix to the appropriate subplot
+            cax = axs[row, col].matshow(W_OV)
+            fig.colorbar(cax, ax=axs[row, col])
+
+    plt.savefig('ov_matrices.png')
+    raise Exception()
+
+        
+
+        #         self.W_V = nn.Parameter(torch.empty((cfg.n_heads, cfg.d_model, cfg.d_head)))
+        # nn.init.normal_(self.W_V, std=self.cfg.init_range)
+        # self.b_V = nn.Parameter(torch.zeros((cfg.n_heads, cfg.d_head)))
+        
+        # self.W_O = nn.Parameter(torch.empty((cfg.n_heads, cfg.d_head, cfg.d_model)))
+        # nn.init.normal_(self.W_O, std=self.cfg.init_range)
+        # self.b_O = nn.Parameter(torch.zeros((cfg.d_model)))
+
+
+if False:
     import pickle
     import tiktoken
 
@@ -759,7 +1853,6 @@ if False:
 
 
     raise Exception()
-
 
 if False:
     import pickle
@@ -1572,7 +2665,7 @@ if False:
 
 
 if False:
-    sentences = pickle.load(open('10_token_sentences.p', 'rb'))
+    sentences = pickle.load(open('openwebtext_100_token_sentences.p', 'rb'))
  
     resids_to_add_to_storage = defaultdict(list)
 
@@ -1581,7 +2674,8 @@ if False:
 
         test_tokens = cuda(reference_gpt2.to_tokens(sentence))
 
-        _, all_resids = demo_gpt2(test_tokens)
+        # _, all_resids = demo_gpt2(test_tokens)
+        _, _, all_resids = demo_gpt2(test_tokens, also_return_vs=True)
 
         last_resids_at_position = {}
 
@@ -1594,14 +2688,16 @@ if False:
                 # print('b', np.sum(last_resids_at_position[position]))
                 # print('c', np.sum(resid[0, position, :].detach().numpy() - last_resids_at_position[position]))
                 # print('')
-                resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy() - last_resids_at_position[position], sentence, position))
-                # resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy(), sentence, position))
-                last_resids_at_position[position] = resid[0, position, :].detach().numpy()
+                # resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy() - last_resids_at_position[position], sentence, position))
+                # for l in range(12):
+                #     resids_to_add_to_storage[k].append((resid[0, position, l, :].detach().numpy(), sentence, position))
+                resids_to_add_to_storage[k].append((resid[position, :].detach().numpy(), sentence, position))
+                # last_resids_at_position[position] = resid[0, position, :].detach().numpy()
 
         if i % 25 == 0:
             print(i)
 
-            resids_path = '10_token_resids.p'
+            resids_path = 'openwebtext_100_token_absolute_vs.p'
             # resids_path = '10_token_absolute_resids.p'
             stored_resids = pickle.load(open(resids_path, 'rb')) if file_exists(resids_path) else defaultdict(list)
             for key in resids_to_add_to_storage:
@@ -1615,7 +2711,57 @@ if False:
 
 
 if False:
-    resids = pickle.load(open('10_token_resids.p', 'rb'))
+    sentences = pickle.load(open('openwebtext_100_token_sentences.p', 'rb'))
+ 
+    resids_to_add_to_storage = defaultdict(list)
+
+    for i, sentence in enumerate(sentences[:500]):
+        encoded_sentence = enc.encode(sentence)
+
+        test_tokens = cuda(reference_gpt2.to_tokens(sentence))
+
+        # _, all_resids = demo_gpt2(test_tokens)
+        _, _, all_resids = demo_gpt2(test_tokens, also_return_vs=True)
+
+        last_resids_at_position = {}
+
+        for k, resid in enumerate(all_resids):
+            if k == 0:
+                for position in range(resid.shape[1]):
+                    last_resids_at_position[position] = np.zeros(resid.shape[2])
+            for position in range(1, resid.shape[1]):
+                # print('a', np.sum(resid[0, position, :].detach().numpy()))
+                # print('b', np.sum(last_resids_at_position[position]))
+                # print('c', np.sum(resid[0, position, :].detach().numpy() - last_resids_at_position[position]))
+                # print('')
+                # resids_to_add_to_storage[k].append((resid[0, position, :].detach().numpy() - last_resids_at_position[position], sentence, position))
+                for l in range(12):
+                    resids_to_add_to_storage[k*12 + l].append((resid[0, position, l, :].detach().numpy(), sentence, position))
+                # resids_to_add_to_storage[k].append((resid[position, :].detach().numpy(), sentence, position))
+                # last_resids_at_position[position] = resid[0, position, :].detach().numpy()
+
+        if i % 25 == 0:
+            print(i)
+
+            resids_path = 'openwebtext_100_token_absolute_vs.p'
+            # resids_path = '10_token_absolute_resids.p'
+            stored_resids = pickle.load(open(resids_path, 'rb')) if file_exists(resids_path) else defaultdict(list)
+            for key in resids_to_add_to_storage:
+                stored_resids[key].extend(resids_to_add_to_storage[key])
+            pickle.dump(stored_resids, open(resids_path, 'wb'))
+
+            resids_to_add_to_storage = defaultdict(list)
+            stored_resids = None
+
+    raise Exception()
+
+
+
+
+if False:
+    # resids = pickle.load(open('openwebtext_100_token_absolute_resids.p', 'rb'))
+    resids = pickle.load(open('openwebtext_100_token_absolute_vs.p', 'rb'))
+    # resids = pickle.load(open('10_token_resids.p', 'rb'))
     # resids = pickle.load(open('10_token_absolute_resids.p', 'rb'))
     resids_by_sentence = {}
 
@@ -1625,8 +2771,9 @@ if False:
         for resid, sentence, tup in resids[layer]:
             resids_by_sentence[layer][sentence].append((resid, tup))
 
-    pickle.dump(resids_by_sentence, open('10_token_resids_by_sentence.p', 'wb'))
+    # pickle.dump(resids_by_sentence, open('10_token_resids_by_sentence.p', 'wb'))
     # pickle.dump(resids_by_sentence, open('10_token_absolute_resids_by_sentence.p', 'wb'))
+    pickle.dump(resids_by_sentence, open('openwebtext_100_token_absolute_vs_by_sentence.p', 'wb'))
 
     raise Exception()
 
@@ -1636,14 +2783,22 @@ if True:
 
     from sklearn.preprocessing import StandardScaler
 
+    dataset_str = 'openwebtext_100_token'
+
     absoluteness = True
+    # object_type_str = 'resids'
+    object_type_str = 'vs'
+    object_type_str_2 = '_vs' if object_type_str == 'vs' else ''
 
     absoluteness_str = 'absolute_' if absoluteness else ''
 
-    resids = pickle.load(open(f'10_token_{absoluteness_str}resids.p', 'rb'))
+    resids = pickle.load(open(f'{dataset_str}_{absoluteness_str}{object_type_str}.p', 'rb'))
 
     for i, layer in enumerate(resids):
         print(f'Layer {layer}')
+
+        print(resids[layer][i][0].shape)
+
         X = np.array([resids[layer][i][0] for i in range(len(resids[layer]))]) 
 
         scaler = StandardScaler()
@@ -1660,11 +2815,11 @@ if True:
         # print("Explained variance by component: ", explained_variance_ratio)
 
         for j, component in enumerate(pca.components_):
-            pickle.dump(component, open(f'10_token_{absoluteness_str}pca_layer_{i}_component_{j}.p', 'wb'))
-        pickle.dump(X_pca, open(f'10_token_{absoluteness_str}x_pca_layer_{i}.p', 'wb'))
-        pickle.dump(scaler, open(f'10_token_{absoluteness_str}scaler_layer_{i}.p', 'wb'))
+            pickle.dump(component, open(f'{dataset_str}_{absoluteness_str}pca{object_type_str_2}_layer_{i}_component_{j}.p', 'wb'))
+        pickle.dump(X_pca, open(f'{dataset_str}_{absoluteness_str}x_pca{object_type_str_2}_layer_{i}.p', 'wb'))
+        pickle.dump(scaler, open(f'{dataset_str}_{absoluteness_str}scaler{object_type_str_2}_layer_{i}.p', 'wb'))
         pickle.dump(explained_variance_ratio, 
-                    open(f'10_token_{absoluteness_str}explained_variance_ratio_layer_{i}.p', 'wb'))
+                    open(f'{dataset_str}_{absoluteness_str}explained{object_type_str_2}_variance_ratio_layer_{i}.p', 'wb'))
 
         # for resid, sentence, position in resids[layer][:60]:
         #     resid_scaled = scaler.transform([resid])

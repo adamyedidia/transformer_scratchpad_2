@@ -13,7 +13,7 @@ import random
 
 
 
-resids = pickle.load(open('10_token_resids.p', 'rb'))
+# resids = pickle.load(open('10_token_resids.p', 'rb'))
 
 app = Flask(__name__)
 
@@ -24,10 +24,22 @@ def index():
         component_index = int(request.form.get('component'))
         diffs_on = 'diffs_on' in request.form  # Returns True if checkbox was checked, False otherwise
         basis_type = request.form.get('basis_type')
+        head_number = int(request.form.get('head_number'), 0)
 
         absoluteness_str = '' if diffs_on else 'absolute_'
 
-        resids_by_sentence = pickle.load(open(f'10_token_{absoluteness_str}resids_by_sentence.p', 'rb'))
+        # object_type_str = 'resids'
+        object_type_str = 'vs'
+        object_type_str_2 = '_vs' if object_type_str == 'vs' else ''
+
+        # absoluteness_str = 'absolute_' if absoluteness else ''
+
+
+        dataset_str = 'openwebtext_100_token'
+        # dataset_str = '10_token'
+
+        # resids_by_sentence = pickle.load(open(f'{dataset_str}_{absoluteness_str}resids_by_sentence.p', 'rb'))
+        resids_by_sentence = pickle.load(open(f'{dataset_str}_{absoluteness_str}{object_type_str}_by_sentence.p', 'rb'))
 
         sentence_dicts = []
 
@@ -40,13 +52,32 @@ def index():
         # pca = PCA(n_components=100)
         # X_pca = pca.fit_transform(X_scaled)
 
-        component = pickle.load(open(f'10_token_{absoluteness_str}pca_layer_{layer}_component_{component_index}.p', 'rb'))
-        if basis_type == 'Cartesian':
-            component = np.zeros(component.shape)
-            component[component_index] += 1
-        X_pca = pickle.load(open(f'10_token_{absoluteness_str}x_pca_layer_{layer}.p', 'rb'))
-        scaler = pickle.load(open(f'10_token_{absoluteness_str}scaler_layer_{layer}.p', 'rb'))
-        explained_variance_ratio = pickle.load(open(f'10_token_{absoluteness_str}absolute_explained_variance_ratio_layer_{layer}.p', 'rb'))
+        
+        if basis_type in ['Cartesian', 'PCA']:
+            component = pickle.load(open(f'{dataset_str}_{absoluteness_str}pca{object_type_str_2}_layer_{layer}_component_{component_index}.p', 'rb'))
+            if basis_type == 'Cartesian':
+                component = np.zeros(component.shape)
+                component[component_index] += 1
+        elif basis_type == 'W_OV singular vectors':
+            # eigs = pickle.load(open(f'eigenvectors_wvo_block_{layer}_col_{head_number}.p', 'rb'))
+            # eigenvalues, eigenvectors = eigs
+            # (U, singular_values, Vh) = pickle.load(open(f'singular_vectors_block_{layer}_col_{head_number}.p', 'rb'))
+
+            # component = Vh[component_index]
+
+            # W_V = pickle.load(open(f'v_matrix_block_{layer}_col_{head_number}.p', 'rb'))
+            # component = W_V[component_index]
+            # component = pickle.load(open('average_family_direction.p', 'rb'))
+            component = pickle.load(open('average_multi_token_direction.p', 'rb'))
+
+
+            print('shape', component.shape)
+            # component = eigenvectors[component_index]
+        else:
+            raise Exception('Bad basis type')
+#        X_pca = pickle.load(open(f'10_token_{absoluteness_str}x_pca_layer_{layer}.p', 'rb'))
+        scaler = pickle.load(open(f'{dataset_str}_{absoluteness_str}scaler{object_type_str_2}_layer_{layer}.p', 'rb'))
+        explained_variance_ratio = pickle.load(open(f'{dataset_str}_{absoluteness_str}explained{object_type_str_2}_variance_ratio_layer_{layer}.p', 'rb'))
 
         raw_projections = []
         resid_tups = []
@@ -72,9 +103,18 @@ def index():
                 ))
 
         for sentence in sentences:
+            print(sentence)
             for resid, position in resids_by_sentence[layer][sentence]:
                 resid_scaled = scaler.transform([resid])
-                raw_projection = np.dot(component, resid_scaled.T)[0]
+                dot_product = np.dot(component, resid_scaled.T)
+                print(dot_product)
+                print(dot_product.shape)
+                assert len(np.shape(dot_product)) == 1 and np.shape(dot_product)[0] == 1
+
+                # print(np.dot(component, resid_scaled.T))
+                # raw_projection = np.real(dot_product)[0]
+                # raw_projection = np.imag(dot_product)[0]
+                raw_projection = dot_product[0]
                 raw_projections.append(raw_projection)
                 resid_tups.append((resid, sentence, position))
 
@@ -86,6 +126,9 @@ def index():
             
             resid, sentence, position = resid_tup
             encoded_sentence = enc.encode(sentence)
+
+            # print(min_proj)
+            # print(max_proj)
 
             # Normalize projection to the range [0, 1]
             projection = (raw_projection - min_proj) / (max_proj - min_proj)
@@ -110,7 +153,9 @@ def index():
             # If this sentence is already in the list, add the word to it
             for existing_sentence in sentences:
                 if existing_sentence["sentence"] == sentence_dict["sentence"]:
-                    existing_sentence["words"].append(sentence_dict["words"][0])
+                    # if statement is a hack to deal with the duplicated sentences
+                    if existing_sentence['sentence'] not in ''.join([word_dict['text'] for word_dict in existing_sentence['words']]):
+                        existing_sentence["words"].append(sentence_dict["words"][0])
                     break
             # If it's a new sentence, add it to the list
             else:
@@ -122,10 +167,10 @@ def index():
         user_sentence = None
 
 
-        return render_template('index.html', sentences=sentences, layer=layer, component=component_index, diffs_on=diffs_on, variance_explained=f"{(variance_explained*100):.1f}" if basis_type == 'PCA' else '', basis_type=basis_type)
+        return render_template('index.html', sentences=sentences, layer=layer, component=component_index, diffs_on=diffs_on, variance_explained=f"{(variance_explained*100):.1f}" if basis_type == 'PCA' else '', basis_type=basis_type, head_number=head_number)
 
     else:
-        return render_template('index.html', sentences=[], layer=0, component=0, diffs_on=False, variance_explained=0, basis_type='PCA', user_sentence=None)
+        return render_template('index.html', sentences=[], layer=0, component=0, diffs_on=False, variance_explained=0, basis_type='PCA', user_sentence=None, head_number=0)
 
 # for layer in resids:
 #     X = np.array([resids[layer][i][0] for i in range(len(resids[layer]))]) 
@@ -157,3 +202,4 @@ def index():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
+    # app.run(host='0.0.0.0', port=5001)
